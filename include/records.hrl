@@ -72,3 +72,31 @@
 -define(HPROF_HEADER_MAGIC, "JAVA PROFILE 1.0.3\0").
 
 %% Records
+
+-record(hprof_header, {
+    heap_ref_size :: pos_integer(),
+    dump_timestamp_ms :: pos_integer()
+}).
+
+-record(hprof_record_raw, {
+    record_type :: pos_integer(),
+    offset_microseconds :: pos_integer(),
+    data_size :: pos_integer(),
+    raw_data :: binary()
+}).
+
+-record(hprof_record_string, {
+    id :: pos_integer(),
+    data :: binary()
+}).
+
+-record(hprof_record_load_class, {
+    serial :: pos_integer(),
+    class_object_id :: pos_integer(),
+    stack_trace_serial :: pos_integer(),
+    class_name_string_id :: pos_integer()
+}).
+
+-record(hprof_record_unload_class, {
+    serial :: pos_integer()
+}).

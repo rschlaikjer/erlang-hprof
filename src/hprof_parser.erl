@@ -20,14 +20,9 @@
     code_change/3
 ]).
 
--record(hprof_header, {
-    heap_ref_size :: pos_integer(),
-    dump_timestamp_ms :: pos_integer()
-}).
-
 -record(state, {
     header :: #hprof_header{},
-    records :: [#hprof_record{}]
+    records :: [any()]
 }).
 
 %% Public API
@@ -80,30 +75,35 @@ parse_file(State, Filename) ->
     parse_binary(State, Bin).
 
 parse_binary(State, Bin) ->
-    {Header, RecordsBinary} = parse_fixed_header(Bin),
-    Records = parse_records(RecordsBinary),
+    {Header, RecordsBinary} = parse_header(Bin),
+    io:format("Header: ~p~n", [Header]),
+    Records = parse_records(Header, RecordsBinary),
     State#state{
         header=Header,
         records=Records
     }.
 
-parse_fixed_header(Bindata) ->
+parse_header(Bindata) ->
+    % Header has the format:
+    % Fixed header (JAVA PROFILE 1.0.3)
+    % u32: Pointer size (in bytes)
+    % u64: Time this dump was taken (milliseconds)
     <<?HPROF_HEADER_MAGIC, Bin1/binary>> = Bindata,
-    <<HeapRefSize:4/integer-unit:8,
-      DumpTimeMs:8/integer-unit:8,
+    <<HeapRefSize:?UINT32,
+      DumpTimeMs:?UINT64,
       Rest/binary >> = Bin1,
-    Header = #hprof_fixed_header{
+    Header = #hprof_header{
         heap_ref_size = HeapRefSize,
         dump_timestamp_ms = DumpTimeMs
     },
     {Header, Rest}.
 
-parse_records(Binary) when is_binary(Binary) ->
-    parse_records(Binary, []).
+parse_records(Header=#hprof_header{}, Binary) when is_binary(Binary) ->
+    parse_records(Header, Binary, []).
 
-parse_records(<<>>, Accumulator) ->
+parse_records(_Header, <<>>, Accumulator) ->
     lists:reverse(Accumulator);
-parse_records(Binary, Acc) ->
+parse_records(Header, Binary, Acc) ->
     % Each record has the format:
     % u8: Record type
     % u32: Microseconds since header timestamp
@@ -114,8 +114,67 @@ parse_records(Binary, Acc) ->
       RecordSize:?UINT32,
       Rest/binary>> = Binary,
     <<RecordData:RecordSize/binary, Rest1/binary>> = Rest,
-    Record = parse_record(RecordType, Microseconds, RecordData),
-    parse_records(Rest1, [Record|Acc]).
+    RawRecord = #hprof_record_raw{
+        record_type=RecordType,
+        offset_microseconds=Microseconds,
+        data_size=RecordSize,
+        raw_data=RecordData
+    },
+    Record = parse_record(
+        Header#hprof_header.heap_ref_size,
+        RawRecord
+    ),
+    io:format("Parsed: ~p~n", [Record]),
+    parse_records(Header, Rest1, [Record|Acc]).
 
-parse_record(RecordType, Microseconds, Data) ->
-    ok.
+%% Enum HprofTag
+% -define(HPROF_TAG_STRING, 16#01).
+% -define(HPROF_TAG_LOAD_CLASS, 16#02).
+% -define(HPROF_TAG_UNLOAD_CLASS, 16#03).
+% -define(HPROF_TAG_STACK_FRAME, 16#04).
+% -define(HPROF_TAG_STACK_TRACE, 16#05).
+% -define(HPROF_TAG_ALLOC_SITES, 16#06).
+% -define(HPROF_TAG_HEAP_SUMMARY, 16#07).
+% -define(HPROF_TAG_START_THREAD, 16#0A).
+% -define(HPROF_TAG_END_THREAD, 16#0B).
+% -define(HPROF_TAG_HEAP_DUMP, 16#0C).
+% -define(HPROF_TAG_HEAP_DUMP_SEGMENT, 16#1C).
+% -define(HPROF_TAG_HEAP_DUMP_END, 16#2C).
+% -define(HPROF_TAG_CPU_SAMPLES, 16#0D).
+% -define(HPROF_TAG_CONTROL_SETTINGS, 16#0E).
+%
+parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_STRING}) ->
+    % Contains an ordinary utf-8 string
+    <<Id:RefSize/big-unsigned-integer-unit:8,
+      Data/binary>> = Raw#hprof_record_raw.raw_data,
+    #hprof_record_string{
+        id=Id,
+        data=Data
+    };
+parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_LOAD_CLASS}) ->
+    % Loading a class
+    % u32: Serial number
+    % Ref: Class object ID
+    % u32: Stack trace serial number
+    % Ref: Class name string ID
+    <<Serial:?UINT32,
+      ClassObjId:RefSize/big-unsigned-integer-unit:8,
+      StackSerial:?UINT32,
+      ClassNameId:RefSize/big-unsigned-integer-unit:8
+    >> = Raw#hprof_record_raw.raw_data,
+    #hprof_record_load_class{
+        serial=Serial,
+        class_object_id=ClassObjId,
+        stack_trace_serial=StackSerial,
+        class_name_string_id=ClassNameId
+    };
+parse_record(_RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_UNLOAD_CLASS}) ->
+    % Loading a class
+    % u32: Serial number
+    <<Serial:?UINT32
+    >> = Raw#hprof_record_raw.raw_data,
+    #hprof_record_unload_class{
+        serial=Serial
+    };
+parse_record(_RefSize, #hprof_record_raw{record_type=Type}) ->
+    throw({bad_record, {unknown_type, Type}}).
