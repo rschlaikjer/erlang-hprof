@@ -127,22 +127,6 @@ parse_records(Header, Binary, Acc) ->
     io:format("Parsed: ~p~n", [Record]),
     parse_records(Header, Rest1, [Record|Acc]).
 
-%% Enum HprofTag
-% -define(HPROF_TAG_STRING, 16#01).
-% -define(HPROF_TAG_LOAD_CLASS, 16#02).
-% -define(HPROF_TAG_UNLOAD_CLASS, 16#03).
-% -define(HPROF_TAG_STACK_FRAME, 16#04).
-% -define(HPROF_TAG_STACK_TRACE, 16#05).
-% -define(HPROF_TAG_ALLOC_SITES, 16#06).
-% -define(HPROF_TAG_HEAP_SUMMARY, 16#07).
-% -define(HPROF_TAG_START_THREAD, 16#0A).
-% -define(HPROF_TAG_END_THREAD, 16#0B).
-% -define(HPROF_TAG_HEAP_DUMP, 16#0C).
-% -define(HPROF_TAG_HEAP_DUMP_SEGMENT, 16#1C).
-% -define(HPROF_TAG_HEAP_DUMP_END, 16#2C).
-% -define(HPROF_TAG_CPU_SAMPLES, 16#0D).
-% -define(HPROF_TAG_CONTROL_SETTINGS, 16#0E).
-%
 parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_STRING}) ->
     % Contains an ordinary utf-8 string
     <<Id:RefSize/big-unsigned-integer-unit:8,
@@ -176,5 +160,162 @@ parse_record(_RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_UNLOAD_CLASS
     #hprof_record_unload_class{
         serial=Serial
     };
+parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_STACK_FRAME}) ->
+    % Stack frame
+    % Ref: Stack fram ID
+    % Ref: Method name string ID
+    % Ref: Method signature string ID
+    % Ref: Source file name string ID
+    % u32: Class serial number
+    % u32: Location
+    <<FrameId:RefSize/big-unsigned-integer-unit:8,
+      MethodNameStringId:RefSize/big-unsigned-integer-unit:8,
+      MethodSigStringId:RefSize/big-unsigned-integer-unit:8,
+      SourceFileStringId:RefSize/big-unsigned-integer-unit:8,
+      ClassSerial:?UINT32,
+      Location:?UINT32
+    >> = Raw#hprof_record_raw.raw_data,
+    #hprof_record_stack_frame{
+        frame_id=FrameId,
+        method_name_string_id=MethodNameStringId,
+        method_signature_string_id=MethodSigStringId,
+        source_file_string_id=SourceFileStringId,
+        class_serial=ClassSerial,
+        location=Location
+    };
+parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_STACK_TRACE}) ->
+    % Stack trace
+    % u32: Stack trace serial
+    % u32: Thread serial
+    % u32: Number of frames
+    % [Ref]: Stack fram IDs
+    <<Serial:?UINT32,
+      ThreadSerial:?UINT32,
+      FrameCount:?UINT32,
+      FrameIdsBin/binary
+    >> = Raw#hprof_record_raw.raw_data,
+    FrameIds = [
+        FrameId || <<FrameId:RefSize/big-unsigned-integer-unit:8>>
+        <= FrameIdsBin
+    ],
+    #hprof_record_stack_trace{
+        serial=Serial,
+        thread_serial=ThreadSerial,
+        frame_count=FrameCount,
+        frame_ids=FrameIds
+    };
+parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_HEAP_DUMP_SEGMENT}) ->
+    parse_heap_dump_segments(RefSize, Raw);
 parse_record(_RefSize, #hprof_record_raw{record_type=Type}) ->
     throw({bad_record, {unknown_type, Type}}).
+
+parse_heap_dump_segments(RefSize, #hprof_record_raw{raw_data=Bin}) ->
+    Segments = parse_heap_dump_segments(RefSize, Bin, []),
+    #hprof_record_heap_dump_segment{
+        segments=Segments
+    }.
+
+parse_heap_dump_segments(_RefSize, <<>>, Acc) ->
+    lists:reverse(Acc);
+parse_heap_dump_segments(RefSize, Bin, Acc) ->
+    {Record, Rest} = parse_heap_dump_segment(RefSize, Bin),
+    parse_heap_dump_segments(RefSize, Rest, [Record|Acc]).
+
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_UNKNOWN, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8, Rest/binary>> = Bin,
+    Root = #hprof_heap_root_unknown{
+        object_id=ObjectId
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_JNI_GLOBAL, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      JniGlobalRefId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_jni_global{
+        object_id=ObjectId,
+        jni_global_ref_id=JniGlobalRefId
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_JNI_LOCAL, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      ThreadSerial:?UINT32,
+      FrameNum:?UINT32,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_jni_local{
+        object_id=ObjectId,
+        thread_serial=ThreadSerial,
+        frame_number=FrameNum
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_JAVA_FRAME, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      ThreadSerial:?UINT32,
+      FrameNum:?UINT32,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_java_frame{
+        object_id=ObjectId,
+        thread_serial=ThreadSerial,
+        frame_number=FrameNum
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_NATIVE_STACK, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      ThreadSerial:?UINT32,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_native_stack{
+        object_id=ObjectId,
+        thread_serial=ThreadSerial
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_STICKY_CLASS, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_sticky_class{
+        object_id=ObjectId
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_THREAD_BLOCK, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      ThreadSerial:?UINT32,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_thread_block{
+        object_id=ObjectId,
+        thread_serial=ThreadSerial
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_MONITOR_USED, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_monitor_used{
+        object_id=ObjectId
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      ThreadSerial:?UINT32,
+      StackTraceSerial:?UINT32,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_thread_object{
+        object_id=ObjectId,
+        thread_serial=ThreadSerial,
+        stack_trace_serial=StackTraceSerial
+    },
+    {Root, Rest};
+parse_heap_dump_segment(_RefSize, <<>>) -> throw(bad_heap_segment).
+
+
+% -define(HPROF_ROOT_THREAD_OBJECT, 16#08).
+% -define(HPROF_CLASS_DUMP, 16#20).
+% -define(HPROF_INSTANCE_DUMP, 16#21).
+% -define(HPROF_OBJECT_ARRAY_DUMP, 16#22).
+% -define(HPROF_PRIMITIVE_ARRAY_DUMP, 16#23).
+% -define(HPROF_TAG_ALLOC_SITES, 16#06).
+% -define(HPROF_TAG_HEAP_SUMMARY, 16#07).
+% -define(HPROF_TAG_START_THREAD, 16#0A).
+% -define(HPROF_TAG_END_THREAD, 16#0B).
+% -define(HPROF_TAG_HEAP_DUMP, 16#0C).
+% -define(HPROF_TAG_HEAP_DUMP_SEGMENT, 16#1C).
+% -define(HPROF_TAG_HEAP_DUMP_END, 16#2C).
+% -define(HPROF_TAG_CPU_SAMPLES, 16#0D).
+% -define(HPROF_TAG_CONTROL_SETTINGS, 16#0E).
+%

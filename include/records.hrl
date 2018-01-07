@@ -100,3 +100,68 @@
 -record(hprof_record_unload_class, {
     serial :: pos_integer()
 }).
+
+-record(hprof_record_stack_frame, {
+    frame_id :: pos_integer(),
+    method_name_string_id :: pos_integer(),
+    method_signature_string_id :: pos_integer(),
+    source_file_string_id :: pos_integer(),
+    class_serial :: pos_integer(),
+    location :: pos_integer()
+}).
+
+-record(hprof_record_stack_trace, {
+    serial :: pos_integer(),
+    thread_serial :: pos_integer(),
+    frame_count :: pos_integer(),
+    frame_ids :: [pos_integer()]
+}).
+
+-record(hprof_record_heap_dump_segment, {
+    segments :: [any()]
+}).
+
+-record(hprof_heap_root_unknown, {
+    object_id :: pos_integer()
+}).
+
+-record(hprof_heap_root_jni_global, {
+    object_id :: pos_integer(),
+    jni_global_ref_id :: pos_integer()
+}).
+
+-record(hprof_heap_root_jni_local, {
+    object_id :: pos_integer(),
+    thread_serial :: pos_integer(),
+    frame_number :: pos_integer()
+}).
+
+-record(hprof_heap_root_java_frame, {
+    object_id :: pos_integer(),
+    thread_serial :: pos_integer(),
+    frame_number :: pos_integer()
+}).
+
+-record(hprof_heap_root_native_stack, {
+    object_id :: pos_integer(),
+    thread_serial :: pos_integer()
+}).
+
+-record(hprof_heap_root_sticky_class, {
+    object_id :: pos_integer()
+}).
+
+-record(hprof_heap_root_thread_block, {
+    object_id :: pos_integer(),
+    thread_serial :: pos_integer()
+}).
+
+-record(hprof_heap_root_monitor_used, {
+    object_id :: pos_integer()
+}).
+
+-record(hprof_heap_root_thread_object, {
+    object_id :: pos_integer(),
+    thread_serial :: pos_integer(),
+    stack_trace_serial :: pos_integer()
+}).
