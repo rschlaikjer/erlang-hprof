@@ -187,3 +187,26 @@
     element_type :: pos_integer(),
     elements :: [any()]
 }).
+
+-record(hprof_heap_dump_info, {
+    heap_type :: pos_integer(),
+    heap_type_string_id :: pos_integer()
+}).
+
+-record(hprof_heap_root_interned_string, {
+    object_id :: pos_integer()
+}).
+
+-record(hprof_heap_root_debugger, {
+    object_id :: pos_integer()
+}).
+
+-record(hprof_heap_root_vm_internal, {
+    object_id :: pos_integer()
+}).
+
+-record(hprof_heap_root_jni_monitor, {
+    object_id :: pos_integer(),
+    thread_serial :: pos_integer(),
+    frame_number :: pos_integer()
+}).

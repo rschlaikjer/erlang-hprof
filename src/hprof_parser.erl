@@ -311,7 +311,7 @@ parse_heap_dump_segment(RefSize, <<?HPROF_INSTANCE_DUMP, Bin/binary>>) ->
       ClassObjectId:RefSize/big-unsigned-integer-unit:8,
       DataSize:?UINT32,
       Rest/binary>> = Bin,
-    <<Data:DataSize/binary, Rest1>> = Rest,
+    <<Data:DataSize/binary, Rest1/binary>> = Rest,
     Instance = #hprof_heap_instance_raw{
         object_id=ObjectId,
         stack_trace_serial=StackTraceSerial,
@@ -357,7 +357,56 @@ parse_heap_dump_segment(RefSize, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/binary>>) ->
         element_type=DataType,
         elements=Elements
     },
-    {Array, Rest1}.
+    {Array, Rest1};
+parse_heap_dump_segment(RefSize, <<?HPROF_HEAP_DUMP_INFO, Bin/binary>>) ->
+    <<HeapType:?UINT32,
+      HeapNameStringId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    Info = #hprof_heap_dump_info{
+        heap_type=HeapType,
+        heap_type_string_id=HeapNameStringId
+    },
+    {Info, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_INTERNED_STRING, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_interned_string{
+        object_id=ObjectId
+    },
+    {Root, Rest};
+parse_heap_dump_segment(_, <<?HPROF_ROOT_FINALIZING, _/binary>>) ->
+    throw({obsolete_tag, hprof_root_finalizing});
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_DEBUGGER, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_debugger{
+        object_id=ObjectId
+    },
+    {Root, Rest};
+parse_heap_dump_segment(_, <<?HPROF_ROOT_REFERENCE_CLEANUP, _/binary>>) ->
+    throw({obsolete_tag, hprof_root_reference_cleanup});
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_VM_INTERNAL, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_vm_internal{
+        object_id=ObjectId
+    },
+    {Root, Rest};
+parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_JNI_MONITOR, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      ThreadSerial:?UINT32,
+      FrameNum:?UINT32,
+      Rest/binary>> = Bin,
+    Root = #hprof_heap_root_jni_monitor{
+        object_id=ObjectId,
+        thread_serial=ThreadSerial,
+        frame_number=FrameNum
+    },
+    {Root, Rest};
+parse_heap_dump_segment(_, <<?HPROF_UNREACHABLE, _/binary>>) ->
+    throw({obsolete_tag, hprof_root_unreachable});
+parse_heap_dump_segment(_, <<?HPROF_PRIMITIVE_ARRAY_NODATA_DUMP, _/binary>>) ->
+    throw({obsolete_tag, hprof_primitive_array_nodata_dump}).
 
 primitive_size(RefSize, ?HPROF_BASIC_OBJECT) -> RefSize;
 primitive_size(_, ?HPROF_BASIC_BOOLEAN) -> 1;
