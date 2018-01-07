@@ -1,0 +1,12 @@
+{application, hprof,
+ [
+  {description, "HPROF heap dump parser"},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  sasl
+                 ]},
+  {env, []}
+ ]}.
