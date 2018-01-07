@@ -1,13 +1,14 @@
 %% Macros for decoding integers
-% Big endian
+% Signed
+-define(INT8, 1/big-signed-integer-unit:8).
+-define(INT16, 2/big-signed-integer-unit:8).
+-define(INT32, 4/big-signed-integer-unit:8).
+-define(INT64, 8/big-signed-integer-unit:8).
+% Unsigned
 -define(UINT8, 1/big-unsigned-integer-unit:8).
 -define(UINT16, 2/big-unsigned-integer-unit:8).
 -define(UINT32, 4/big-unsigned-integer-unit:8).
 -define(UINT64, 8/big-unsigned-integer-unit:8).
-% Little endian
--define(UINT16LE, 2/little-unsigned-integer-unit:8).
--define(UINT32LE, 4/little-unsigned-integer-unit:8).
--define(UINT64LE, 8/little-unsigned-integer-unit:8).
 
 %% Enum HprofTag
 -define(HPROF_TAG_STRING, 16#01).
@@ -164,4 +165,25 @@
     object_id :: pos_integer(),
     thread_serial :: pos_integer(),
     stack_trace_serial :: pos_integer()
+}).
+
+-record(hprof_heap_instance_raw, {
+    object_id :: pos_integer(),
+    stack_trace_serial :: pos_integer(),
+    class_object_id :: pos_integer(),
+    data :: binary()
+}).
+
+-record(hprof_object_array, {
+    object_id :: pos_integer(),
+    stack_trace_serial :: pos_integer(),
+    element_class_object_id :: pos_integer(),
+    elements :: [pos_integer()]
+}).
+
+-record(hprof_primitive_array, {
+    object_id :: pos_integer(),
+    stack_trace_serial :: pos_integer(),
+    element_type :: pos_integer(),
+    elements :: [any()]
 }).

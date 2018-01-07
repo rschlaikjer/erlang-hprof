@@ -301,21 +301,81 @@ parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>) ->
         stack_trace_serial=StackTraceSerial
     },
     {Root, Rest};
-parse_heap_dump_segment(_RefSize, <<>>) -> throw(bad_heap_segment).
+parse_heap_dump_segment(_RefSize, <<?HPROF_CLASS_DUMP, _Bin/binary>>) ->
+    % Huge, will get back to this
+    throw(not_implemented);
+parse_heap_dump_segment(RefSize, <<?HPROF_INSTANCE_DUMP, Bin/binary>>) ->
+    % Can't actually parse these until we have the class dump data
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      StackTraceSerial:?UINT32,
+      ClassObjectId:RefSize/big-unsigned-integer-unit:8,
+      DataSize:?UINT32,
+      Rest/binary>> = Bin,
+    <<Data:DataSize/binary, Rest1>> = Rest,
+    Instance = #hprof_heap_instance_raw{
+        object_id=ObjectId,
+        stack_trace_serial=StackTraceSerial,
+        class_object_id=ClassObjectId,
+        data=Data
+    },
+    {Instance, Rest1};
+parse_heap_dump_segment(RefSize, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      StackTraceSerial:?UINT32,
+      ElementCount:?UINT32,
+      ElementClassObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    DataSize = ElementCount * RefSize,
+    <<ArrayData:DataSize/binary, Rest1/binary>> = Rest,
+    Elements = [
+        Elem || <<Elem:RefSize/big-unsigned-integer-unit:8>>
+        <= ArrayData
+    ],
+    Array = #hprof_object_array{
+        object_id=ObjectId,
+        stack_trace_serial=StackTraceSerial,
+        element_class_object_id=ElementClassObjectId,
+        elements=Elements
+    },
+    {Array, Rest1};
+parse_heap_dump_segment(RefSize, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/binary>>) ->
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      StackTraceSerial:?UINT32,
+      ElementCount:?UINT32,
+      DataType:?UINT8,
+      Rest/binary>> = Bin,
+    ElementSize = primitive_size(RefSize, DataType),
+    DataSize = ElementCount * ElementSize,
+    <<ArrayData:DataSize/binary, Rest1/binary>> = Rest,
+    Elements = [
+        parse_primitive(DataType, Elem) || <<Elem:ElementSize/binary>>
+        <= ArrayData
+    ],
+    Array = #hprof_primitive_array{
+        object_id=ObjectId,
+        stack_trace_serial=StackTraceSerial,
+        element_type=DataType,
+        elements=Elements
+    },
+    {Array, Rest1}.
 
+primitive_size(RefSize, ?HPROF_BASIC_OBJECT) -> RefSize;
+primitive_size(_, ?HPROF_BASIC_BOOLEAN) -> 1;
+primitive_size(_, ?HPROF_BASIC_CHAR) -> 2;
+primitive_size(_, ?HPROF_BASIC_FLOAT) -> 4;
+primitive_size(_, ?HPROF_BASIC_DOUBLE) -> 8;
+primitive_size(_, ?HPROF_BASIC_BYTE) -> 1;
+primitive_size(_, ?HPROF_BASIC_SHORT) -> 2;
+primitive_size(_, ?HPROF_BASIC_INT) -> 4;
+primitive_size(_, ?HPROF_BASIC_LONG) -> 8.
 
-% -define(HPROF_ROOT_THREAD_OBJECT, 16#08).
-% -define(HPROF_CLASS_DUMP, 16#20).
-% -define(HPROF_INSTANCE_DUMP, 16#21).
-% -define(HPROF_OBJECT_ARRAY_DUMP, 16#22).
-% -define(HPROF_PRIMITIVE_ARRAY_DUMP, 16#23).
-% -define(HPROF_TAG_ALLOC_SITES, 16#06).
-% -define(HPROF_TAG_HEAP_SUMMARY, 16#07).
-% -define(HPROF_TAG_START_THREAD, 16#0A).
-% -define(HPROF_TAG_END_THREAD, 16#0B).
-% -define(HPROF_TAG_HEAP_DUMP, 16#0C).
-% -define(HPROF_TAG_HEAP_DUMP_SEGMENT, 16#1C).
-% -define(HPROF_TAG_HEAP_DUMP_END, 16#2C).
-% -define(HPROF_TAG_CPU_SAMPLES, 16#0D).
-% -define(HPROF_TAG_CONTROL_SETTINGS, 16#0E).
-%
+parse_primitive(?HPROF_BASIC_OBJECT, <<V:?UINT32>>) -> V;
+parse_primitive(?HPROF_BASIC_OBJECT, <<V:?UINT64>>) -> V;
+parse_primitive(?HPROF_BASIC_BOOLEAN, <<V:?UINT8>>) -> V;
+parse_primitive(?HPROF_BASIC_CHAR, Bin) -> Bin;
+parse_primitive(?HPROF_BASIC_FLOAT, <<V:32/float>>) -> V;
+parse_primitive(?HPROF_BASIC_DOUBLE, <<V:64/float>>) -> V;
+parse_primitive(?HPROF_BASIC_BYTE, <<V:?INT8>>) -> V;
+parse_primitive(?HPROF_BASIC_SHORT, <<V:?INT16>>) -> V;
+parse_primitive(?HPROF_BASIC_INT, <<V:?INT32>>) -> V;
+parse_primitive(?HPROF_BASIC_LONG, <<V:?INT64>>) -> V.
