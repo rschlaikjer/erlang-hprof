@@ -225,7 +225,8 @@
 
 -record(hprof_instance_field, {
     name_string_id :: pos_integer(),
-    type :: pos_integer()
+    type :: pos_integer(),
+    value :: any()
 }).
 
 -record(hprof_class_dump, {
@@ -244,3 +245,9 @@
     instance_fields :: list(#hprof_instance_field{})
 }).
 
+-record(hprof_heap_instance, {
+    object_id :: pos_integer(),
+    stack_trace_serial :: pos_integer(),
+    class_object_id :: pos_integer(),
+    instance_values :: list(#hprof_instance_field{})
+}).

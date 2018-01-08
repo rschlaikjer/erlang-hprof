@@ -7,7 +7,10 @@
 -export([
     parse_file/1,
     parse_binary/1,
-    close/1
+    close/1,
+    get_primitive_arrays/1,
+    print_class/2,
+    get_string/2
 ]).
 
 % gen_server
@@ -28,10 +31,28 @@
     ets_stack_trace :: reference(),
     ets_stack_frame :: reference(),
     ets_object_array :: reference(),
-    ets_primitive_array :: reference()
+    ets_primitive_array :: reference(),
+    ets_class_dump :: reference(),
+    ets_class_name_by_id :: reference()
 }).
 
 %% Public API
+
+print_class(Pid, ClassId) ->
+    Class = get_class_dump(Pid, ClassId),
+    Statics = Class#hprof_class_dump.static_fields,
+    Instances = Class#hprof_class_dump.instance_fields,
+    StaticNames = [
+        get_string(Pid, Sid) || #hprof_static_field{name_string_id=Sid}
+        <- Statics
+    ],
+    InstanceFieldNames = [
+        get_string(Pid, Sid) || #hprof_instance_field{name_string_id=Sid}
+        <- Instances
+    ],
+
+    io:format("Class statics: ~p~n", [StaticNames]),
+    io:format("Class instance: ~p~n", [InstanceFieldNames]).
 
 parse_file(Filename) ->
     gen_server:start_link(?MODULE, [{file, Filename}], []).
@@ -41,6 +62,15 @@ parse_binary(Binary) when is_binary(Binary) ->
 
 close(Pid) when is_pid(Pid) ->
     gen_server:call(Pid, close).
+
+get_primitive_arrays(Pid) when is_pid(Pid) ->
+    gen_server:call(Pid, get_primitive_arrays, infinity).
+
+get_string(Pid, StringId) when is_pid(Pid) ->
+    gen_server:call(Pid, {get_string, StringId}).
+
+get_class_dump(Pid, ClassId) when is_pid(Pid) ->
+    gen_server:call(Pid, {get_class, ClassId}).
 
 %% Callbacks
 
@@ -53,6 +83,20 @@ init([{binary, Binary}]) ->
 
 handle_call(close, _From, State) ->
     {stop, normal, ok, State};
+handle_call(get_primitive_arrays, _From, State) ->
+    {reply, ets:tab2list(State#state.ets_primitive_array), State};
+handle_call({get_string, StringId}, _From, State) ->
+    Result = case ets:lookup(State#state.ets_strings, StringId) of
+        [] -> not_found;
+        [#hprof_record_string{data=S}|_] -> S
+    end,
+    {reply, Result, State};
+handle_call({get_class, ClassId}, _From, State) ->
+    Result = case ets:lookup(State#state.ets_class_dump, ClassId) of
+        [] -> not_found;
+        [S|_] -> S
+    end,
+    {reply, Result, State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
@@ -87,18 +131,85 @@ init_ets(State) ->
         ets_stack_frame = ets:new(stack_frame, [set, {keypos, 2}]),
         ets_stack_trace = ets:new(stack_trace, [set, {keypos, 2}]),
         ets_object_array = ets:new(object_array, [set, {keypos, 2}]),
-        ets_primitive_array = ets:new(primitive_array, [set, {keypos, 2}])
+        ets_primitive_array = ets:new(primitive_array, [set, {keypos, 2}]),
+        ets_class_dump = ets:new(class_dump, [set, {keypos, 2}]),
+        ets_class_name_by_id = ets:new(class_dump, [set])
     }.
 
 parse_binary(State, Bin) ->
     {Header, RecordsBinary} = parse_header(Bin),
-    Records = parse_records(Header, RecordsBinary),
     State1 = State#state{
-        header=Header,
-        records=Records
+        header=Header
     },
+    % Parse out all of the records, except the instance records that rely on the
+    % class data
+    Records = parse_records(Header, RecordsBinary),
+
+    % Populate the ETS tables with the parsed records
     initialize_ets_for_records(State1, Records),
+
+    % Now grab all of the yet-unparsed instance records, and process them
+    ParsedInstanceRecords = [
+        parse_instance_record(State1, R) || R=#hprof_heap_instance_raw{}
+        <- lists:flatten([
+            S || #hprof_record_heap_dump_segment{segments=S} <- Records
+        ])
+    ],
+
+    io:format("Parsed instances: ~p~n", [ParsedInstanceRecords]),
+
     State1.
+
+parse_instance_record(State, R=#hprof_heap_instance_raw{}) ->
+    % Break out the record data
+    #hprof_heap_instance_raw{
+        object_id=ObjectId,
+        stack_trace_serial=StackTraceSerial,
+        class_object_id=ClassObjectId,
+        data=Data
+    } = R,
+
+    % Get the ref size for parsing later
+    Header = State#state.header,
+    RefSize = Header#hprof_header.heap_ref_size,
+    Values = parse_instance_record_for_class(
+        State, RefSize, ClassObjectId, Data, []
+    ),
+    #hprof_heap_instance{
+        object_id=ObjectId,
+        stack_trace_serial=StackTraceSerial,
+        class_object_id=ClassObjectId,
+        instance_values=Values
+    }.
+
+parse_instance_record_for_class(_State, _RefSize, 0, _Binary, Acc) ->
+    lists:flatten(lists:reverse(Acc));
+parse_instance_record_for_class(State, RefSize, ClassId, Binary, Acc) ->
+    % Get the class instance for this object
+    ClassObj = hd(ets:lookup(State#state.ets_class_dump, ClassId)),
+
+    % Get the list of instance fields to read data for, and extract them
+    ClassInstanceFields = ClassObj#hprof_class_dump.instance_fields,
+    SuperClassId = ClassObj#hprof_class_dump.superclass_object,
+    {FieldValues, Rest} = extract_instance_id_fields(
+        RefSize, ClassInstanceFields, Binary, []
+    ),
+    parse_instance_record_for_class(
+        State, RefSize, SuperClassId, Rest, [FieldValues|Acc]
+    ).
+
+extract_instance_id_fields(_RefSize, [], Binary, Acc) ->
+    {lists:reverse(Acc), Binary};
+extract_instance_id_fields(RefSize, [Field|Fields], Binary, Acc) ->
+    #hprof_instance_field{name_string_id=Name, type=Type} = Field,
+    DataSize = primitive_size(RefSize, Type),
+    <<PrimitiveBin:DataSize/binary, Rest/binary>> = Binary,
+    Value = #hprof_instance_field{
+        name_string_id=Name,
+        type=Type,
+        value=parse_primitive(Type, PrimitiveBin)
+    },
+    extract_instance_id_fields(RefSize, Fields, Rest, [Value|Acc]).
 
 initialize_ets_for_records(State, Records) ->
     lists:foreach(
@@ -124,6 +235,8 @@ insert_record_to_ets(_State, Record) -> ok. %throw({badarg, Record}).
 insert_heap_dump_segment_to_ets(#state{ets_object_array=Ets}, Record=#hprof_object_array{}) ->
     ets:insert(Ets, Record);
 insert_heap_dump_segment_to_ets(#state{ets_primitive_array=Ets}, Record=#hprof_primitive_array{}) ->
+    ets:insert(Ets, Record);
+insert_heap_dump_segment_to_ets(#state{ets_class_dump=Ets}, Record=#hprof_class_dump{}) ->
     ets:insert(Ets, Record);
 insert_heap_dump_segment_to_ets(State, Segment) -> ok. %throw({badarg, Segment}).
 
