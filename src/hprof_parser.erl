@@ -76,7 +76,6 @@ parse_file(State, Filename) ->
 
 parse_binary(State, Bin) ->
     {Header, RecordsBinary} = parse_header(Bin),
-    io:format("Header: ~p~n", [Header]),
     Records = parse_records(Header, RecordsBinary),
     State#state{
         header=Header,
@@ -124,7 +123,6 @@ parse_records(Header, Binary, Acc) ->
         Header#hprof_header.heap_ref_size,
         RawRecord
     ),
-    io:format("Parsed: ~p~n", [Record]),
     parse_records(Header, Rest1, [Record|Acc]).
 
 parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_STRING}) ->
@@ -304,9 +302,7 @@ parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>) ->
     },
     {Root, Rest};
 parse_heap_dump_segment(RefSize, <<?HPROF_CLASS_DUMP, Bin/binary>>) ->
-    {Class, Rest} = parse_class_dump_segment(RefSize, Bin),
-    io:format("Parsed class: ~p~n", [Class]),
-    {Class, Rest};
+    {_Class, _Rest} = parse_class_dump_segment(RefSize, Bin);
 parse_heap_dump_segment(RefSize, <<?HPROF_INSTANCE_DUMP, Bin/binary>>) ->
     % Can't actually parse these until we have the class dump data
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
