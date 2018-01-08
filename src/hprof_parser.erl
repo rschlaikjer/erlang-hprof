@@ -206,6 +206,8 @@ parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_STACK_TRACE})
     };
 parse_record(RefSize, Raw=#hprof_record_raw{record_type=?HPROF_TAG_HEAP_DUMP_SEGMENT}) ->
     parse_heap_dump_segments(RefSize, Raw);
+parse_record(_RefSize, #hprof_record_raw{record_type=?HPROF_TAG_HEAP_DUMP_END}) ->
+    heap_dump_end;
 parse_record(_RefSize, #hprof_record_raw{record_type=Type}) ->
     throw({bad_record, {unknown_type, Type}}).
 
