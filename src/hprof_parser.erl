@@ -22,7 +22,13 @@
 
 -record(state, {
     header :: #hprof_header{},
-    records :: [any()]
+    records :: list(any()),
+    ets_strings :: reference(),
+    ets_class_load :: reference(),
+    ets_stack_trace :: reference(),
+    ets_stack_frame :: reference(),
+    ets_object_array :: reference(),
+    ets_primitive_array :: reference()
 }).
 
 %% Public API
@@ -40,10 +46,10 @@ close(Pid) when is_pid(Pid) ->
 
 init([{file, Filename}]) ->
     gen_server:cast(self(), {parse_file, Filename}),
-    {ok, #state{}};
+    {ok, init_ets(#state{})};
 init([{binary, Binary}]) ->
     gen_server:cast(self(), {parse_binary, Binary}),
-    {ok, #state{}}.
+    {ok, init_ets(#state{})}.
 
 handle_call(close, _From, State) ->
     {stop, normal, ok, State};
@@ -74,13 +80,52 @@ parse_file(State, Filename) ->
     {ok, Bin} = file:read_file(Filename),
     parse_binary(State, Bin).
 
+init_ets(State) ->
+    State#state{
+        ets_strings = ets:new(strings, [set, {keypos, 2}]),
+        ets_class_load = ets:new(class_load, [set, {keypos, 2}]),
+        ets_stack_frame = ets:new(stack_frame, [set, {keypos, 2}]),
+        ets_stack_trace = ets:new(stack_trace, [set, {keypos, 2}]),
+        ets_object_array = ets:new(object_array, [set, {keypos, 2}]),
+        ets_primitive_array = ets:new(primitive_array, [set, {keypos, 2}])
+    }.
+
 parse_binary(State, Bin) ->
     {Header, RecordsBinary} = parse_header(Bin),
     Records = parse_records(Header, RecordsBinary),
-    State#state{
+    State1 = State#state{
         header=Header,
         records=Records
-    }.
+    },
+    initialize_ets_for_records(State1, Records),
+    State1.
+
+initialize_ets_for_records(State, Records) ->
+    lists:foreach(
+        fun(R) -> insert_record_to_ets(State, R) end,
+        Records
+    ).
+
+insert_record_to_ets(#state{ets_strings=Ets}, Record=#hprof_record_string{}) ->
+    ets:insert(Ets, Record);
+insert_record_to_ets(#state{ets_class_load=Ets}, Record=#hprof_record_load_class{}) ->
+    ets:insert(Ets, Record);
+insert_record_to_ets(#state{ets_stack_frame=Ets}, Record=#hprof_record_stack_frame{}) ->
+    ets:insert(Ets, Record);
+insert_record_to_ets(#state{ets_stack_trace=Ets}, Record=#hprof_record_stack_trace{}) ->
+    ets:insert(Ets, Record);
+insert_record_to_ets(State, Record=#hprof_record_heap_dump_segment{}) ->
+    lists:foreach(
+        fun(S) -> insert_heap_dump_segment_to_ets(State, S) end,
+        Record#hprof_record_heap_dump_segment.segments
+    );
+insert_record_to_ets(_State, Record) -> ok. %throw({badarg, Record}).
+
+insert_heap_dump_segment_to_ets(#state{ets_object_array=Ets}, Record=#hprof_object_array{}) ->
+    ets:insert(Ets, Record);
+insert_heap_dump_segment_to_ets(#state{ets_primitive_array=Ets}, Record=#hprof_primitive_array{}) ->
+    ets:insert(Ets, Record);
+insert_heap_dump_segment_to_ets(State, Segment) -> ok. %throw({badarg, Segment}).
 
 parse_header(Bindata) ->
     % Header has the format:

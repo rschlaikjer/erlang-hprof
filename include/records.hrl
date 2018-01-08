@@ -115,11 +115,11 @@
     serial :: pos_integer(),
     thread_serial :: pos_integer(),
     frame_count :: pos_integer(),
-    frame_ids :: [pos_integer()]
+    frame_ids :: list(pos_integer())
 }).
 
 -record(hprof_record_heap_dump_segment, {
-    segments :: [any()]
+    segments :: list(any())
 }).
 
 -record(hprof_heap_root_unknown, {
@@ -178,14 +178,14 @@
     object_id :: pos_integer(),
     stack_trace_serial :: pos_integer(),
     element_class_object_id :: pos_integer(),
-    elements :: [pos_integer()]
+    elements :: list(pos_integer())
 }).
 
 -record(hprof_primitive_array, {
     object_id :: pos_integer(),
     stack_trace_serial :: pos_integer(),
     element_type :: pos_integer(),
-    elements :: [any()]
+    elements :: list(any())
 }).
 
 -record(hprof_heap_dump_info, {
@@ -211,22 +211,6 @@
     frame_number :: pos_integer()
 }).
 
--record(hprof_class_dump, {
-    class_object :: pos_integer(),
-    stack_trace_serial :: pos_integer(),
-    superclass_object :: pos_integer(),
-    classloader_object :: pos_integer(),
-    signer :: pos_integer(),
-    prot_domain :: pos_integer(),
-    instance_size :: pos_integer(),
-    num_constants :: pos_integer(),
-    constants :: [any()],
-    num_static_fields :: pos_integer(),
-    static_fields :: [any()],
-    num_instance_fields :: pos_integer(),
-    instance_fields :: [any()]
-}).
-
 -record(hprof_constant_field, {
     constant_pool_index :: pos_integer(),
     type :: pos_integer(),
@@ -243,3 +227,20 @@
     name_string_id :: pos_integer(),
     type :: pos_integer()
 }).
+
+-record(hprof_class_dump, {
+    class_object :: pos_integer(),
+    stack_trace_serial :: pos_integer(),
+    superclass_object :: pos_integer(),
+    classloader_object :: pos_integer(),
+    signer :: pos_integer(),
+    prot_domain :: pos_integer(),
+    instance_size :: pos_integer(),
+    num_constants :: pos_integer(),
+    constants :: list(#hprof_constant_field{}),
+    num_static_fields :: pos_integer(),
+    static_fields :: list(#hprof_static_field{}),
+    num_instance_fields :: pos_integer(),
+    instance_fields :: list(#hprof_instance_field{})
+}).
+
