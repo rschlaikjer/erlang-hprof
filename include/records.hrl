@@ -210,3 +210,36 @@
     thread_serial :: pos_integer(),
     frame_number :: pos_integer()
 }).
+
+-record(hprof_class_dump, {
+    class_object :: pos_integer(),
+    stack_trace_serial :: pos_integer(),
+    superclass_object :: pos_integer(),
+    classloader_object :: pos_integer(),
+    signer :: pos_integer(),
+    prot_domain :: pos_integer(),
+    instance_size :: pos_integer(),
+    num_constants :: pos_integer(),
+    constants :: [any()],
+    num_static_fields :: pos_integer(),
+    static_fields :: [any()],
+    num_instance_fields :: pos_integer(),
+    instance_fields :: [any()]
+}).
+
+-record(hprof_constant_field, {
+    constant_pool_index :: pos_integer(),
+    type :: pos_integer(),
+    data :: any()
+}).
+
+-record(hprof_static_field, {
+    name_string_id :: pos_integer(),
+    type :: pos_integer(),
+    data :: any()
+}).
+
+-record(hprof_instance_field, {
+    name_string_id :: pos_integer(),
+    type :: pos_integer()
+}).

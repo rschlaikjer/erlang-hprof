@@ -301,9 +301,10 @@ parse_heap_dump_segment(RefSize, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>) ->
         stack_trace_serial=StackTraceSerial
     },
     {Root, Rest};
-parse_heap_dump_segment(_RefSize, <<?HPROF_CLASS_DUMP, _Bin/binary>>) ->
-    % Huge, will get back to this
-    throw(not_implemented);
+parse_heap_dump_segment(RefSize, <<?HPROF_CLASS_DUMP, Bin/binary>>) ->
+    {Class, Rest} = parse_class_dump_segment(RefSize, Bin),
+    io:format("Parsed class: ~p~n", [Class]),
+    {Class, Rest};
 parse_heap_dump_segment(RefSize, <<?HPROF_INSTANCE_DUMP, Bin/binary>>) ->
     % Can't actually parse these until we have the class dump data
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
@@ -422,9 +423,109 @@ parse_primitive(?HPROF_BASIC_OBJECT, <<V:?UINT32>>) -> V;
 parse_primitive(?HPROF_BASIC_OBJECT, <<V:?UINT64>>) -> V;
 parse_primitive(?HPROF_BASIC_BOOLEAN, <<V:?UINT8>>) -> V;
 parse_primitive(?HPROF_BASIC_CHAR, Bin) -> Bin;
+parse_primitive(?HPROF_BASIC_FLOAT, <<255, 128, 0, 0>>) -> minus_infinity;
+parse_primitive(?HPROF_BASIC_FLOAT, <<127, 128, 0, 0>>) -> infinity;
+parse_primitive(?HPROF_BASIC_FLOAT, <<127, 192, 0, 0>>) -> nan;
 parse_primitive(?HPROF_BASIC_FLOAT, <<V:32/float>>) -> V;
+parse_primitive(?HPROF_BASIC_DOUBLE, <<255,240,0,0,0,0,0,0>>) -> minus_infinity;
+parse_primitive(?HPROF_BASIC_DOUBLE, <<127,248,0,0,0,0,0,0>>) -> infinity;
+parse_primitive(?HPROF_BASIC_DOUBLE, <<127,240,0,0,0,0,0,0>>) -> nan;
 parse_primitive(?HPROF_BASIC_DOUBLE, <<V:64/float>>) -> V;
 parse_primitive(?HPROF_BASIC_BYTE, <<V:?INT8>>) -> V;
 parse_primitive(?HPROF_BASIC_SHORT, <<V:?INT16>>) -> V;
 parse_primitive(?HPROF_BASIC_INT, <<V:?INT32>>) -> V;
 parse_primitive(?HPROF_BASIC_LONG, <<V:?INT64>>) -> V.
+
+parse_class_dump_segment(RefSize, Bin) ->
+    <<ClassObjId:RefSize/big-unsigned-integer-unit:8,
+      StackTraceSerial:?UINT32,
+      SuperClassObjId:RefSize/big-unsigned-integer-unit:8,
+      ClassLoaderObjId:RefSize/big-unsigned-integer-unit:8,
+      Signer:RefSize/big-unsigned-integer-unit:8,
+      ProtDomain:RefSize/big-unsigned-integer-unit:8,
+      _Reserved1:RefSize/big-unsigned-integer-unit:8,
+      _Reserved2:RefSize/big-unsigned-integer-unit:8,
+      InstanceSize:?UINT32,
+      NumConstants:?UINT16,
+      Rest1/binary>> = Bin,
+
+    % Empty constant pool for ART, apparently
+    {Constants, Rest2} = parse_class_dump_constants(RefSize, NumConstants, Rest1),
+
+    % Static fields
+    <<NumStatics:?UINT16, Rest3/binary>> = Rest2,
+    {Statics, Rest4} = parse_class_dump_static_fields(RefSize, NumStatics, Rest3),
+
+    % Instance Fields
+    <<NumInstances:?UINT16, Rest5/binary>> = Rest4,
+    {Instances, Rest6} = parse_class_dump_instance_fields(RefSize, NumInstances, Rest5),
+
+    Class = #hprof_class_dump{
+        class_object=ClassObjId,
+        stack_trace_serial=StackTraceSerial,
+        superclass_object=SuperClassObjId,
+        classloader_object=ClassLoaderObjId,
+        signer=Signer,
+        prot_domain=ProtDomain,
+        instance_size=InstanceSize,
+        num_constants=NumConstants,
+        constants=Constants,
+        num_static_fields=NumStatics,
+        static_fields=Statics,
+        num_instance_fields=NumInstances,
+        instance_fields=Instances
+    },
+    {Class, Rest6}.
+
+parse_class_dump_constants(RefSize, NumConstants, Binary) ->
+    parse_class_dump_constants(RefSize, NumConstants, Binary, []).
+parse_class_dump_constants(_RefSize, 0, Binary, Acc) ->
+    {lists:reverse(Acc), Binary};
+parse_class_dump_constants(RefSize, NumConstants, Binary, Acc) ->
+    <<ConstantPoolIndex:?UINT16,
+      Type:?UINT8,
+      Rest/binary
+    >> = Binary,
+    FieldSize = primitive_size(RefSize, Type),
+    <<FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
+    FieldData = parse_primitive(Type, FieldDataBin),
+    Field = #hprof_constant_field{
+        constant_pool_index=ConstantPoolIndex,
+        type=Type,
+        data=FieldData
+    },
+    parse_class_dump_constants(RefSize, NumConstants-1, Rest1, [Field|Acc]).
+
+parse_class_dump_static_fields(RefSize, NumStatics, Binary) ->
+    parse_class_dump_static_fields(RefSize, NumStatics, Binary, []).
+parse_class_dump_static_fields(_RefSize, 0, Binary, Acc) ->
+    {lists:reverse(Acc), Binary};
+parse_class_dump_static_fields(RefSize, NumStatics, Binary, Acc) ->
+    <<FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
+      Type:?UINT8,
+      Rest/binary
+    >> = Binary,
+    FieldSize = primitive_size(RefSize, Type),
+    <<FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
+    FieldData = parse_primitive(Type, FieldDataBin),
+    Field = #hprof_static_field{
+        name_string_id=FieldNameStringId,
+        type=Type,
+        data=FieldData
+    },
+    parse_class_dump_static_fields(RefSize, NumStatics-1, Rest1, [Field|Acc]).
+
+parse_class_dump_instance_fields(RefSize, NumConstants, Binary) ->
+    parse_class_dump_instance_fields(RefSize, NumConstants, Binary, []).
+parse_class_dump_instance_fields(_RefSize, 0, Binary, Acc) ->
+     {lists:reverse(Acc), Binary};
+parse_class_dump_instance_fields(RefSize, NumConstants, Binary, Acc) ->
+    <<FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
+      Type:?UINT8,
+      Rest/binary
+    >> = Binary,
+    Field = #hprof_instance_field{
+        name_string_id=FieldNameStringId,
+        type=Type
+    },
+    parse_class_dump_instance_fields(RefSize, NumConstants-1, Rest, [Field|Acc]).
