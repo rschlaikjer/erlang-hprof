@@ -14,11 +14,11 @@
 -define(PNG_HEADER_SEGMENT, <<"IHDR">>).
 -define(PNG_DATA_SEGMENT, <<"IDAT">>).
 -define(PNG_END, <<"IEND">>).
--define(PNG_8_BIT, 8).
 -define(PNG_ARGB, 6).
+-define(PNG_RGB, 2).
 
 make_png(Mode, Width, Height, Data) ->
-    Header = make_header(Width, Height),
+    Header = make_header(Mode, Width, Height),
     PixelData = encode_pixel_data(Mode, Width, Data),
     Footer = crc_chunk(?PNG_END, <<>>),
     <<?PNG_HEADER,  % Fixed PNG header
@@ -46,16 +46,30 @@ rgb_565_to_888(<<R:5, G:6, B:5>>) ->
     B1 = ((B * 527) + 23) bsr 6,
     <<R1:8, G1:8, B1:8>>.
 
-make_header(Width, Height) ->
+make_header(Mode, Width, Height) ->
+    ColorType = case has_alpha(Mode) of
+        true -> ?PNG_ARGB;
+        false -> ?PNG_RGB
+    end,
+    BitDepth = case Mode of
+        ?BITMAP_MODE_ARGB_4444 -> 4;
+        _ -> 8
+    end,
     HeaderData = <<
       Width:32, Height:32,
-      ?PNG_8_BIT:8,  % Bit depth
-      ?PNG_ARGB:8,  % Colour type
+      BitDepth:8,  % Bit depth
+      ColorType:8,  % Colour type
       0:8,  % Basic compression
       0:8,  % No filter method
       0:8   % No interlace method
     >>,
     crc_chunk(?PNG_HEADER_SEGMENT, HeaderData).
+
+has_alpha(?BITMAP_MODE_A_8) -> true;
+has_alpha(?BITMAP_MODE_RGB_565) -> false;
+has_alpha(?BITMAP_MODE_ARGB_4444) -> true;
+has_alpha(?BITMAP_MODE_ARGB_8888) -> true;
+has_alpha(?BITMAP_MODE_RGBA_F16) -> true.
 
 crc_chunk(Type, Data) ->
     DataSize = byte_size(Data),
