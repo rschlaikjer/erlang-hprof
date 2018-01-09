@@ -1,6 +1,7 @@
 -module(hprof_parser).
 -behavior(gen_server).
 
+-include_lib("stdlib/include/ms_transform.hrl").
 -include("include/records.hrl").
 
 % Public API
@@ -10,7 +11,11 @@
     close/1,
     get_primitive_arrays/1,
     print_class/2,
-    get_string/2
+    get_string/2,
+    get_instances_for_class/2,
+    get_bitmaps/1,
+    get_instance/2,
+    get_primitive_array/2
 ]).
 
 % gen_server
@@ -27,6 +32,8 @@
     header :: #hprof_header{},
     records :: list(any()),
     ets_strings :: reference(),
+    ets_strings_reverse :: reference(),
+    ets_heap_instance :: reference(),
     ets_class_load :: reference(),
     ets_stack_trace :: reference(),
     ets_stack_frame :: reference(),
@@ -66,11 +73,23 @@ close(Pid) when is_pid(Pid) ->
 get_primitive_arrays(Pid) when is_pid(Pid) ->
     gen_server:call(Pid, get_primitive_arrays, infinity).
 
+get_primitive_array(Pid, ObjectId) when is_pid(Pid) ->
+    gen_server:call(Pid, {get_primitive_array, ObjectId}, infinity).
+
 get_string(Pid, StringId) when is_pid(Pid) ->
     gen_server:call(Pid, {get_string, StringId}).
 
 get_class_dump(Pid, ClassId) when is_pid(Pid) ->
     gen_server:call(Pid, {get_class, ClassId}).
+
+get_instances_for_class(Pid, ClassName) when is_pid(Pid) and is_binary(ClassName) ->
+    gen_server:call(Pid, {get_instances_for_class, ClassName}, infinity).
+
+get_bitmaps(Pid) when is_pid(Pid) ->
+    gen_server:call(Pid, get_bitmaps, infinity).
+
+get_instance(Pid, InstanceId) when is_pid(Pid) ->
+    gen_server:call(Pid, {get_instance, InstanceId}, infinity).
 
 %% Callbacks
 
@@ -85,6 +104,8 @@ handle_call(close, _From, State) ->
     {stop, normal, ok, State};
 handle_call(get_primitive_arrays, _From, State) ->
     {reply, ets:tab2list(State#state.ets_primitive_array), State};
+handle_call({get_primitive_array, ObjectId}, _From, State) ->
+    {reply, ets_get(State#state.ets_primitive_array, ObjectId), State};
 handle_call({get_string, StringId}, _From, State) ->
     Result = case ets:lookup(State#state.ets_strings, StringId) of
         [] -> not_found;
@@ -96,6 +117,15 @@ handle_call({get_class, ClassId}, _From, State) ->
         [] -> not_found;
         [S|_] -> S
     end,
+    {reply, Result, State};
+handle_call({get_instances_for_class, ClassName}, _From, State) ->
+    Result = get_instances_for_class_impl(State, ClassName),
+    {reply, Result, State};
+handle_call(get_bitmaps, _From, State) ->
+    Result = get_bitmaps_impl(State),
+    {reply, Result, State};
+handle_call({get_instance, InstanceId}, _From, State) ->
+    Result = get_heap_instance(State, InstanceId),
     {reply, Result, State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
@@ -124,10 +154,18 @@ parse_file(State, Filename) ->
     {ok, Bin} = file:read_file(Filename),
     parse_binary(State, Bin).
 
+ets_get(Ets, Key) ->
+    case ets:lookup(Ets, Key) of
+        [] -> not_found;
+        [Value] -> Value
+    end.
+
 init_ets(State) ->
     State#state{
         ets_strings = ets:new(strings, [set, {keypos, 2}]),
+        ets_strings_reverse = ets:new(strings_reverse, [set]),
         ets_class_load = ets:new(class_load, [set, {keypos, 2}]),
+        ets_heap_instance = ets:new(heap_instance, [set, {keypos, 2}]),
         ets_stack_frame = ets:new(stack_frame, [set, {keypos, 2}]),
         ets_stack_trace = ets:new(stack_trace, [set, {keypos, 2}]),
         ets_object_array = ets:new(object_array, [set, {keypos, 2}]),
@@ -135,6 +173,84 @@ init_ets(State) ->
         ets_class_dump = ets:new(class_dump, [set, {keypos, 2}]),
         ets_class_name_by_id = ets:new(class_dump, [set])
     }.
+
+get_field(_Id, []) -> not_found;
+get_field(Id, [Field=#hprof_instance_field{name_string_id=Id}|Fields]) -> Field;
+get_field(Id, [_|Fields]) -> get_field(Id, Fields).
+
+get_bitmaps_impl(State) ->
+    case get_instances_for_class_impl(State, <<"android.graphics.Bitmap">>) of
+        {error, Reason} -> {error, Reason};
+        {ok, Instances} ->
+            % Get the string IDs for the properties we care about
+            MWidth = get_id_for_string(State, <<"mWidth">>),
+            MHeight = get_id_for_string(State, <<"mHeight">>),
+            MBuffer = get_id_for_string(State, <<"mBuffer">>),
+            % If any of those strings don't exist, something is wrong
+            case lists:any(fun(X) -> X =:= not_found end, [MWidth, MHeight, MBuffer]) of
+                true ->
+                    {error, string_table_incomplete};
+                false ->
+                    Bitmaps = [{bitmap,
+                      get_field(MWidth, Values),
+                      get_field(MHeight, Values),
+                      get_field(MBuffer, Values)} ||
+                      #hprof_heap_instance{instance_values=Values}
+                      <- Instances
+                    ],
+                    [Bmp || Bmp={bitmap, W, H, B} <- Bitmaps,
+                     W =/= not_found,
+                     H =/= not_found,
+                     B =/= not_found]
+            end
+    end.
+
+
+get_id_for_string(State, String) when is_binary(String) ->
+    case ets:lookup(State#state.ets_strings_reverse, String) of
+        [] -> not_found;
+        [{_, Id}] -> Id
+    end.
+
+get_heap_instance(State, Id) ->
+    case ets:lookup(State#state.ets_heap_instance, Id) of
+        [] -> not_found;
+        [Instance] -> Instance
+    end.
+
+get_instances_for_class_impl(State, ClassName) ->
+    % Get the string ID for the class name
+    case ets:lookup(State#state.ets_strings_reverse, ClassName) of
+        [] -> {error, class_name_not_found};
+        [{_, StringId}] ->
+            % Now find the class object for this string ID
+            io:format("String ID: ~p~n", [StringId]),
+            case get_class_obj_by_name_id(State, StringId) of
+                not_found -> {error, class_not_found};
+                #hprof_class_dump{class_object=COD} ->
+                    {ok, get_instances_with_class_object_id(State, COD)}
+            end
+    end.
+
+get_instances_with_class_object_id(State, ClsObjId) ->
+    ets:select(
+        State#state.ets_heap_instance,
+        ets:fun2ms(
+          fun(F=#hprof_heap_instance{class_object_id=CID}) when ClsObjId =:= CID -> F end)
+     ).
+
+get_class_obj_by_name_id(State, StringId) ->
+    % Need to use the class load records to get the class object ID
+    case ets:select(
+        State#state.ets_class_load,
+        ets:fun2ms(fun(F=#hprof_record_load_class{class_name_string_id=Sid}) when StringId =:= Sid -> F end)) of
+        [] -> not_found;
+        [#hprof_record_load_class{class_object_id=ClsObjId}] ->
+            case ets:lookup(State#state.ets_class_dump, ClsObjId) of
+                [] -> not_found;
+                [ClassDump] -> ClassDump
+            end
+    end.
 
 parse_binary(State, Bin) ->
     {Header, RecordsBinary} = parse_header(Bin),
@@ -156,7 +272,11 @@ parse_binary(State, Bin) ->
         ])
     ],
 
-    io:format("Parsed instances: ~p~n", [ParsedInstanceRecords]),
+    % And dump them all into ETS
+    lists:foreach(
+        fun(Instance) -> insert_heap_instance_to_ets(State1, Instance) end,
+        ParsedInstanceRecords
+    ),
 
     State1.
 
@@ -217,8 +337,13 @@ initialize_ets_for_records(State, Records) ->
         Records
     ).
 
-insert_record_to_ets(#state{ets_strings=Ets}, Record=#hprof_record_string{}) ->
-    ets:insert(Ets, Record);
+insert_record_to_ets(State=#state{}, Record=#hprof_record_string{}) ->
+    ets:insert(State#state.ets_strings, Record),
+    % Backmapping table
+    ets:insert(State#state.ets_strings_reverse, {
+        Record#hprof_record_string.data,
+        Record#hprof_record_string.id
+    });
 insert_record_to_ets(#state{ets_class_load=Ets}, Record=#hprof_record_load_class{}) ->
     ets:insert(Ets, Record);
 insert_record_to_ets(#state{ets_stack_frame=Ets}, Record=#hprof_record_stack_frame{}) ->
@@ -231,6 +356,9 @@ insert_record_to_ets(State, Record=#hprof_record_heap_dump_segment{}) ->
         Record#hprof_record_heap_dump_segment.segments
     );
 insert_record_to_ets(_State, Record) -> ok. %throw({badarg, Record}).
+
+insert_heap_instance_to_ets(State=#state{ets_heap_instance=Ets}, Record=#hprof_heap_instance{}) ->
+    ets:insert(Ets, Record).
 
 insert_heap_dump_segment_to_ets(#state{ets_object_array=Ets}, Record=#hprof_object_array{}) ->
     ets:insert(Ets, Record);
