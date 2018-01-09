@@ -251,3 +251,8 @@
     class_object_id :: pos_integer(),
     instance_values :: list(#hprof_instance_field{})
 }).
+
+-record(hprof_root, {
+    object_id,
+    root_type
+}).
