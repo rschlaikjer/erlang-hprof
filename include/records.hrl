@@ -74,11 +74,6 @@
 
 %% Records
 
--record(hprof_header, {
-    heap_ref_size :: pos_integer(),
-    dump_timestamp_ms :: pos_integer()
-}).
-
 -record(hprof_record_raw, {
     record_type :: pos_integer(),
     offset_microseconds :: pos_integer(),
