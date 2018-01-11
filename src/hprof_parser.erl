@@ -217,10 +217,6 @@ init_ets(State) ->
         ets_roots_jni_monitor = ets:new(roots_jni_monitor, [set, {keypos, 2}])
     }.
 
-get_field(_Id, []) -> not_found;
-get_field(Id, [Field=#hprof_instance_field{name_string_id=Id}|_Fields]) -> Field;
-get_field(Id, [_|Fields]) -> get_field(Id, Fields).
-
 get_bitmaps_impl(State) ->
     case get_instances_for_class_impl(State, <<"android.graphics.Bitmap">>) of
         {error, Reason} -> {error, Reason};
@@ -235,9 +231,9 @@ get_bitmaps_impl(State) ->
                     {error, string_table_incomplete};
                 false ->
                     Bitmaps = [{bitmap,
-                      get_field(MWidth, Values),
-                      get_field(MHeight, Values),
-                      get_field(MBuffer, Values)} ||
+                      maps:get(MWidth, Values),
+                      maps:get(MHeight, Values),
+                      maps:get(MBuffer, Values)} ||
                       #hprof_heap_instance{instance_values=Values}
                       <- Instances
                     ],
@@ -295,89 +291,7 @@ get_class_obj_by_name_id(State, StringId) ->
     end.
 
 parse_binary(State, Bin) ->
-    {State1, RecordsBinary} = parse_header(State, Bin),
-
-    % Do our first parsing pass, which handles all the record types except for
-    % the instances, which can only be dealt with once we have all the class
-    % definitions. The parse_records method will insert non-instance records
-    % directly into ETS.
-    State2 = parse_records_optimized(State1, RecordsBinary),
-
-    % Now that we have all these instance records, parse them and hoover
-    % them all into ETS.
-    lists_flat_foreach(
-        fun(R=#hprof_heap_instance_raw{}) ->
-            ets:insert(
-                State2#state.ets_heap_instance,
-                parse_instance_record(State1, R)
-            )
-        end,
-        State2#state.raw_instance_records
-    ),
-
-    erlang:garbage_collect(),
-    io:format("Finished loading~n"),
-    State2.
-
-lists_flat_foreach(_Fun, []) -> ok;
-lists_flat_foreach(Fun, [Sublist|Rest]) when is_list(Sublist) ->
-    lists_flat_foreach(Fun, Sublist),
-    lists_flat_foreach(Fun, Rest);
-lists_flat_foreach(Fun, [E|Elements]) ->
-    Fun(E),
-    lists_flat_foreach(Fun, Elements).
-
-parse_instance_record(State, R=#hprof_heap_instance_raw{}) ->
-    % Break out the record data
-    #hprof_heap_instance_raw{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        class_object_id=ClassObjectId,
-        data=Data
-    } = R,
-
-    % Get the ref size for parsing later
-    RefSize = State#state.heap_ref_size,
-    Values = parse_instance_record_for_class(
-        State, RefSize, ClassObjectId, Data, []
-    ),
-    #hprof_heap_instance{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        class_object_id=ClassObjectId,
-        instance_values=Values
-    }.
-
-parse_instance_record_for_class(_State, _RefSize, 0, _Binary, Acc) ->
-    Acc;
-parse_instance_record_for_class(State, RefSize, ClassId, Binary, Acc) ->
-    % Get the class instance for this object
-    ClassObj = hd(ets:lookup(State#state.ets_class_dump, ClassId)),
-
-    % Get the list of instance fields to read data for, and extract them
-    ClassInstanceFields = ClassObj#hprof_class_dump.instance_fields,
-    SuperClassId = ClassObj#hprof_class_dump.superclass_object,
-    {FieldValues, Rest} = extract_instance_id_fields(
-        RefSize, ClassInstanceFields, Binary, #{}
-    ),
-    parse_instance_record_for_class(
-        State, RefSize, SuperClassId, Rest, [FieldValues|Acc]
-    ).
-
-extract_instance_id_fields(_RefSize, [], Binary, Acc) ->
-    {Acc, Binary};
-extract_instance_id_fields(RefSize, [Field|Fields], Binary, Acc) ->
-    #hprof_instance_field{name_string_id=Name, type=Type} = Field,
-    DataSize = primitive_size(RefSize, Type),
-    <<PrimitiveBin:DataSize/binary, Rest/binary>> = Binary,
-    Value = #hprof_instance_field{
-        name_string_id=Name,
-        type=Type,
-        value=parse_primitive(PrimitiveBin, Type)
-    },
-    extract_instance_id_fields(
-        RefSize, Fields, Rest, maps:put(Name, Value, Acc)
-    ).
+    parse_header(State, Bin).
 
 parse_header(State, Bindata) ->
     % Header has the format:
@@ -388,10 +302,94 @@ parse_header(State, Bindata) ->
       HeapRefSize:?UINT32,
       DumpTimeMs:?UINT64,
       Rest/binary >> = Bindata,
-    {State#state{
+    State1 = State#state{
         heap_ref_size = HeapRefSize,
         dump_timestamp_ms = DumpTimeMs
-    }, Rest}.
+    },
+    parse_binary_with_header(State1, Rest).
+
+parse_binary_with_header(State, <<RecordsBinary/binary>>) ->
+    % Do our first parsing pass, which handles all the record types except for
+    % the instances, which can only be dealt with once we have all the class
+    % definitions. The parse_records method will insert non-instance records
+    % directly into ETS.
+    State1 = parse_records_optimized(State, RecordsBinary),
+
+    io:format("First pass finished.~n"),
+
+
+    % Now that we have all these instance records, parse them and hoover
+    % them all into ETS.
+    lists:foreach(
+        fun(R=#hprof_heap_instance_raw{}) ->
+            ets:insert(
+                State2#state.ets_heap_instance,
+                parse_instance_record(State1, R)
+            )
+        end,
+        State1#state.raw_instance_records
+    ),
+
+    erlang:garbage_collect(),
+    io:format("Finished loading~n"),
+    State1.
+
+parse_instance_record(State, R=#hprof_heap_instance_raw{}) ->
+    % Break out the record data
+    #hprof_heap_instance_raw{
+        object_id=ObjectId,
+        stack_trace_serial=StackTraceSerial,
+        class_object_id=ClassObjectId,
+        data=Data
+    } = R,
+
+    % Parse the class data
+    Values = parse_instance_record_for_class(
+        State, Data, ClassObjectId, #{}
+    ),
+    #hprof_heap_instance{
+        object_id=ObjectId,
+        stack_trace_serial=StackTraceSerial,
+        class_object_id=ClassObjectId,
+        instance_values=Values
+    }.
+
+% Class ID of 0 is 'Object'
+parse_instance_record_for_class(_State, <<_Binary/binary>>, 0, Acc) ->
+    Acc;
+parse_instance_record_for_class(State, <<Binary/binary>>, ClassId, Acc) ->
+    % Get the class instance for this object
+    ClassObj = hd(ets:lookup(State#state.ets_class_dump, ClassId)),
+
+    % Get the list of instance fields to read data for, and extract them
+    ClassInstanceFields = ClassObj#hprof_class_dump.instance_fields,
+    SuperClassId = ClassObj#hprof_class_dump.superclass_object,
+    extract_instance_id_fields(
+        State, Binary, SuperClassId, ClassInstanceFields, Acc
+    ).
+
+extract_instance_id_fields(State, <<Binary/binary>>, SuperClassId, [], Acc) ->
+    parse_instance_record_for_class(
+        State, Binary, SuperClassId, Acc
+    );
+extract_instance_id_fields(State, <<Binary/binary>>, SuperClassId, [Field|Fields], Acc) ->
+    #hprof_instance_field{name_string_id=Name, type=Type} = Field,
+    RefSize = State#state.heap_ref_size,
+    DataSize = primitive_size(RefSize, Type),
+    extract_instance_id_field(
+        State, Binary, SuperClassId, Fields, Acc, Name, Type, DataSize
+    ).
+
+extract_instance_id_field(State, <<Binary/binary>>, SuperClassId, Fields, Acc, Name, Type, DataSize) ->
+    <<PrimitiveBin:DataSize/binary, Rest/binary>> = Binary,
+    Value = #hprof_instance_field{
+        name_string_id=Name,
+        type=Type,
+        value=parse_primitive(PrimitiveBin, Type)
+    },
+    extract_instance_id_fields(
+        State, Rest, SuperClassId, Fields, maps:put(Name, Value, Acc)
+    ).
 
 parse_records_optimized(State, <<>>) ->
     State;
@@ -840,101 +838,46 @@ parse_class_dump_segment_optimized(State, <<Bin/binary>>, RemainingBytes) ->
 
     HeaderBytesRead = RefSize + 4 + RefSize * 6 + 4 + 2,
 
+    % Start building the class
+    Class = #hprof_class_dump{
+        class_object=ClassObjId,
+        stack_trace_serial=StackTraceSerial,
+        superclass_object=SuperClassObjId,
+        classloader_object=ClassLoaderObjId,
+        signer=Signer,
+        prot_domain=ProtDomain,
+        instance_size=InstanceSize,
+        num_constants=NumConstants
+    },
+
     % Empty constant pool for ART, apparently, but may as well be complete
     % about it.
-    {Constants, Rest2, ConstantsBytesRead} = parse_class_dump_constants(
-        RefSize, NumConstants, Rest1
-    ),
+    parse_class_dump_constants(
+        State, Rest1, Class, RemainingBytes-HeaderBytesRead
+    ).
 
-    % Static fields
-    <<NumStatics:?UINT16, Rest3/binary>> = Rest2,
-    {Statics, Rest4, StaticFieldBytesRead} = parse_class_dump_static_fields(
-        RefSize, NumStatics, Rest3
-    ),
+parse_class_dump_constants(State, <<Binary/binary>>, Class=#hprof_class_dump{num_constants=NC}, RemainingBytes) ->
+    parse_class_dump_constants(State, Binary, Class, NC, [], RemainingBytes).
 
-    % Instance Fields
-    <<NumInstances:?UINT16, Rest5/binary>> = Rest4,
-    {Instances, Rest6, InstanceFieldBytesRead} = parse_class_dump_instance_fields(
-        RefSize, NumInstances, Rest5
-    ),
-
-    Class = #hprof_class_dump{
-        class_object=ClassObjId,
-        stack_trace_serial=StackTraceSerial,
-        superclass_object=SuperClassObjId,
-        classloader_object=ClassLoaderObjId,
-        signer=Signer,
-        prot_domain=ProtDomain,
-        instance_size=InstanceSize,
-        num_constants=NumConstants,
-        constants=Constants,
-        num_static_fields=NumStatics,
-        static_fields=Statics,
-        num_instance_fields=NumInstances,
-        instance_fields=Instances
-    },
-
-    ets:insert(State#state.ets_class_dump, Class),
-    TotalBytesRead = (
-        HeaderBytesRead + ConstantsBytesRead +
-        StaticFieldBytesRead + InstanceFieldBytesRead +
-        4 % The UINT16s for number of static/instance fields
-    ),
-
-    parse_heap_dump_segments_optimized(State, Rest6, RemainingBytes - TotalBytesRead).
-
-parse_class_dump_segment(RefSize, Bin) ->
-    <<ClassObjId:RefSize/big-unsigned-integer-unit:8,
-      StackTraceSerial:?UINT32,
-      SuperClassObjId:RefSize/big-unsigned-integer-unit:8,
-      ClassLoaderObjId:RefSize/big-unsigned-integer-unit:8,
-      Signer:RefSize/big-unsigned-integer-unit:8,
-      ProtDomain:RefSize/big-unsigned-integer-unit:8,
-      _Reserved1:RefSize/big-unsigned-integer-unit:8,
-      _Reserved2:RefSize/big-unsigned-integer-unit:8,
-      InstanceSize:?UINT32,
-      NumConstants:?UINT16,
-      Rest1/binary>> = Bin,
-
-    % Empty constant pool for ART, apparently
-    {Constants, Rest2} = parse_class_dump_constants(RefSize, NumConstants, Rest1),
-
-    % Static fields
-    <<NumStatics:?UINT16, Rest3/binary>> = Rest2,
-    {Statics, Rest4} = parse_class_dump_static_fields(RefSize, NumStatics, Rest3),
-
-    % Instance Fields
-    <<NumInstances:?UINT16, Rest5/binary>> = Rest4,
-    {Instances, Rest6} = parse_class_dump_instance_fields(RefSize, NumInstances, Rest5),
-
-    Class = #hprof_class_dump{
-        class_object=ClassObjId,
-        stack_trace_serial=StackTraceSerial,
-        superclass_object=SuperClassObjId,
-        classloader_object=ClassLoaderObjId,
-        signer=Signer,
-        prot_domain=ProtDomain,
-        instance_size=InstanceSize,
-        num_constants=NumConstants,
-        constants=Constants,
-        num_static_fields=NumStatics,
-        static_fields=Statics,
-        num_instance_fields=NumInstances,
-        instance_fields=Instances
-    },
-    {Class, Rest6}.
-
-parse_class_dump_constants(RefSize, NumConstants, Binary) ->
-    parse_class_dump_constants(RefSize, NumConstants, Binary, [], 0).
-parse_class_dump_constants(_RefSize, 0, Binary, Acc, BytesConsumed) ->
-    {lists:reverse(Acc), Binary, BytesConsumed};
-parse_class_dump_constants(RefSize, NumConstants, Binary, Acc, BytesConsumed) ->
+parse_class_dump_constants(State, <<Binary/binary>>, Class, 0, Acc, RemainingBytes) ->
+    parse_class_dump_segment_optimized_statics(
+        State, Binary, Class#hprof_class_dump{constants=lists:reverse(Acc)}, RemainingBytes
+    );
+parse_class_dump_constants(State, <<Binary/binary>>, Class, NumConstants, Acc, RemainingBytes) ->
     <<ConstantPoolIndex:?UINT16,
       Type:?UINT8,
       Rest/binary
     >> = Binary,
+    RefSize = State#state.heap_ref_size,
     FieldSize = primitive_size(RefSize, Type),
-    <<FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
+    parse_class_dump_constant(
+        State, Rest, Class, NumConstants, Acc,
+        RemainingBytes, ConstantPoolIndex, Type, FieldSize
+    ).
+
+parse_class_dump_constant(State, <<Binary/binary>>, Class, NumConstants, Acc,
+                          RemainingBytes, ConstantPoolIndex, Type, FieldSize) ->
+    <<FieldDataBin:FieldSize/binary, Rest/binary>> = Binary,
     FieldData = parse_primitive(FieldDataBin, Type),
     Field = #hprof_constant_field{
         constant_pool_index=ConstantPoolIndex,
@@ -942,21 +885,44 @@ parse_class_dump_constants(RefSize, NumConstants, Binary, Acc, BytesConsumed) ->
         data=FieldData
     },
     parse_class_dump_constants(
-        RefSize, NumConstants-1, Rest1, [Field|Acc],
-        BytesConsumed + 2 + 1 + FieldSize
+        State, Rest, Class, NumConstants-1, [Field|Acc],
+        RemainingBytes - (2 + 1 + FieldSize)
     ).
 
-parse_class_dump_static_fields(RefSize, NumStatics, Binary) ->
-    parse_class_dump_static_fields(RefSize, NumStatics, Binary, [], 0).
-parse_class_dump_static_fields(_RefSize, 0, Binary, Acc, BytesConsumed) ->
-    {lists:reverse(Acc), Binary, BytesConsumed};
-parse_class_dump_static_fields(RefSize, NumStatics, Binary, Acc, BytesConsumed) ->
+parse_class_dump_segment_optimized_statics(State, <<Bin/binary>>, Class, RemainingBytes) ->
+    %     static_fields=Statics,
+    %     num_instance_fields=NumInstances,
+    %     instance_fields=Instances
+    % Static fields
+    <<NumStatics:?UINT16, Rest/binary>> = Bin,
+    parse_class_dump_static_fields(
+        State, Rest, Class#hprof_class_dump{
+            num_static_fields=NumStatics
+        }, RemainingBytes - 2
+    ).
+
+parse_class_dump_static_fields(State, <<Binary/binary>>, Class=#hprof_class_dump{num_static_fields=NS}, RemainingBytes) ->
+    parse_class_dump_static_fields(State, Binary, NS, [], Class, RemainingBytes).
+parse_class_dump_static_fields(State, <<Binary/binary>>, 0, Acc, Class, RemainingBytes) ->
+    parse_class_dump_segment_optimized_instances(
+        State, Binary,
+        Class#hprof_class_dump{static_fields=lists:reverse(Acc)},
+        RemainingBytes
+    );
+parse_class_dump_static_fields(State, <<Binary/binary>>, NumStatics, Acc, Class, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
     <<FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
       Type:?UINT8,
       Rest/binary
     >> = Binary,
     FieldSize = primitive_size(RefSize, Type),
-    <<FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
+    parse_class_dump_static(
+        State, Rest, NumStatics, Acc, Class, RemainingBytes - (RefSize + 1),
+        FieldNameStringId, Type, FieldSize
+    ).
+
+parse_class_dump_static(State, <<Binary/binary>>, NumStatics, Acc, Class, RemainingBytes, FieldNameStringId, Type, FieldSize) ->
+    <<FieldDataBin:FieldSize/binary, Rest/binary>> = Binary,
     FieldData = parse_primitive(FieldDataBin, Type),
     Field = #hprof_static_field{
         name_string_id=FieldNameStringId,
@@ -964,15 +930,34 @@ parse_class_dump_static_fields(RefSize, NumStatics, Binary, Acc, BytesConsumed) 
         data=FieldData
     },
     parse_class_dump_static_fields(
-        RefSize, NumStatics-1, Rest1, [Field|Acc],
-        BytesConsumed + RefSize + 1 + FieldSize
+        State, Rest, NumStatics-1, [Field|Acc], Class,
+        RemainingBytes - FieldSize
     ).
 
-parse_class_dump_instance_fields(RefSize, NumConstants, Binary) ->
-    parse_class_dump_instance_fields(RefSize, NumConstants, Binary, [], 0).
-parse_class_dump_instance_fields(_RefSize, 0, Binary, Acc, BytesConsumed) ->
-     {lists:reverse(Acc), Binary, BytesConsumed};
-parse_class_dump_instance_fields(RefSize, NumConstants, Binary, Acc, BytesConsumed) ->
+parse_class_dump_segment_optimized_instances(State, <<Bin/binary>>, Class, RemainingBytes) ->
+    % Instance Fields
+    <<NumInstances:?UINT16, Rest/binary>> = Bin,
+    parse_class_dump_instance_fields(
+        State, Rest, Class#hprof_class_dump{
+            num_instance_fields=NumInstances
+        }, RemainingBytes - 2
+    ).
+
+parse_class_dump_instance_fields(State, <<Binary/binary>>,
+                                 Class=#hprof_class_dump{num_instance_fields=N},
+                                 RemainingBytes) ->
+    parse_class_dump_instance_fields(
+        State, Binary, N, [], Class, RemainingBytes
+    ).
+
+parse_class_dump_instance_fields(State, <<Binary/binary>>, 0, Acc, Class, RemainingBytes) ->
+    parse_class_dump_segment_finalize(
+        State, Binary, Class#hprof_class_dump{
+            instance_fields=lists:reverse(Acc)
+        }, RemainingBytes
+    );
+parse_class_dump_instance_fields(State, <<Binary/binary>>, NumFields, Acc, Class, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
     <<FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
       Type:?UINT8,
       Rest/binary
@@ -982,6 +967,10 @@ parse_class_dump_instance_fields(RefSize, NumConstants, Binary, Acc, BytesConsum
         type=Type
     },
     parse_class_dump_instance_fields(
-        RefSize, NumConstants-1, Rest, [Field|Acc],
-        BytesConsumed + RefSize + 1
+        State, Rest, NumFields-1, [Field|Acc],
+        Class, RemainingBytes - (RefSize + 1)
     ).
+
+parse_class_dump_segment_finalize(State, <<Bin/binary>>, Class, RemainingBytes) ->
+    ets:insert(State#state.ets_class_dump, Class),
+    parse_heap_dump_segments_optimized(State, Bin, RemainingBytes).
