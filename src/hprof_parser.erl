@@ -504,7 +504,6 @@ parse_record_optimized(State, Size, <<Binary/binary>>, ?HPROF_TAG_STACK_TRACE) -
     ets:insert(State#state.ets_stack_trace, Record),
     parse_records_optimized(State, Rest);
 parse_record_optimized(State, Size, <<Binary/binary>>, ?HPROF_TAG_HEAP_DUMP_SEGMENT) ->
-    io:format("Hit new heap segment of size ~p~n", [Size]),
     parse_heap_dump_segments_optimized(State, Binary, Size);
 parse_record_optimized(State, Size, <<Binary/binary>>, ?HPROF_TAG_HEAP_DUMP_END) ->
     % Nothing much doing here
@@ -512,10 +511,8 @@ parse_record_optimized(State, Size, <<Binary/binary>>, ?HPROF_TAG_HEAP_DUMP_END)
     parse_records_optimized(State, Rest).
 
 parse_heap_dump_segments_optimized(State, <<Binary/binary>>, 0) ->
-    io:format("Finished parsing heap segment~n"),
     parse_records_optimized(State, Binary);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_UNKNOWN, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: Unknown root~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       Rest/binary>> = Bin,
@@ -527,11 +524,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_UNKNOWN, Bin/binary>>, R
         object_id=ObjectId, root_type=unknown
     }),
     ets:insert(State#state.ets_roots_unknown, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_JNI_GLOBAL, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root jni global~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       JniGlobalRefId:RefSize/big-unsigned-integer-unit:8,
@@ -545,11 +539,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_JNI_GLOBAL, Bin/binary>>
         object_id=ObjectId, root_type=jni_global
     }),
     ets:insert(State#state.ets_roots_jni_global, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_JNI_LOCAL, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root jni local~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       ThreadSerial:?UINT32,
@@ -565,11 +556,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_JNI_LOCAL, Bin/binary>>,
         object_id=ObjectId, root_type=jni_local
     }),
     ets:insert(State#state.ets_roots_jni_local, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_JAVA_FRAME, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root java frame~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       ThreadSerial:?UINT32,
@@ -585,11 +573,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_JAVA_FRAME, Bin/binary>>
         object_id=ObjectId, root_type=java_fram
     }),
     ets:insert(State#state.ets_roots_java_frame, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_NATIVE_STACK, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root native stack~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       ThreadSerial:?UINT32,
@@ -603,11 +588,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_NATIVE_STACK, Bin/binary
         object_id=ObjectId, root_type=native_stack
     }),
     ets:insert(State#state.ets_roots_native_stack, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_STICKY_CLASS, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root sticky class~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       Rest/binary>> = Bin,
@@ -619,11 +601,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_STICKY_CLASS, Bin/binary
         object_id=ObjectId, root_type=sticky_class
     }),
     ets:insert(State#state.ets_roots_sticky_class, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_THREAD_BLOCK, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root thread block~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       ThreadSerial:?UINT32,
@@ -637,11 +616,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_THREAD_BLOCK, Bin/binary
         object_id=ObjectId, root_type=thread_block
     }),
     ets:insert(State#state.ets_roots_thread_block, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_MONITOR_USED, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root monitor used~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       Rest/binary>> = Bin,
@@ -653,11 +629,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_MONITOR_USED, Bin/binary
         object_id=ObjectId, root_type=monitor_used
     }),
     ets:insert(State#state.ets_roots_monitor_used, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root thread object~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       ThreadSerial:?UINT32,
@@ -672,15 +645,11 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binar
     ets:insert(State#state.ets_roots, #hprof_root{
         object_id=ObjectId, root_type=thread_object
     }),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     ets:insert(State#state.ets_roots_thread_object, Root),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_CLASS_DUMP, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: class dump~n"),
     parse_class_dump_segment_optimized(State, Bin, RemainingBytes - 1);
 parse_heap_dump_segments_optimized(State, <<?HPROF_INSTANCE_DUMP, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: instance dump~n"),
     % Can't actually parse these until we have the class dump data
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
@@ -699,11 +668,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_INSTANCE_DUMP, Bin/binary>>, 
     State1 = State#state{
         raw_instance_records=[Instance|State#state.raw_instance_records]
     },
-    io:format("Parsed: ~p~n", [Instance]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State1, Rest1, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: object array dump~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       StackTraceSerial:?UINT32,
@@ -724,11 +690,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary
         elements=Elements
     },
     ets:insert(State#state.ets_object_array, Array),
-    io:format("Parsed: ~p~n", [Array]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest1, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: primitive array dump~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       StackTraceSerial:?UINT32,
@@ -740,7 +703,6 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/bin
         State, DataType, ElementCount, ObjectId,
         StackTraceSerial, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_HEAP_DUMP_INFO, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: heap dump info~n"),
     % Not currently tracking which heap things are in
     RefSize = State#state.heap_ref_size,
     <<_HeapType:?UINT32,
@@ -751,10 +713,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_HEAP_DUMP_INFO, Bin/binary>>,
     %     heap_type_string_id=HeapNameStringId
     % },
     BytesRead = 1 + 4 + RefSize,
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_INTERNED_STRING, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root interned string~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       Rest/binary>> = Bin,
@@ -766,13 +726,10 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_INTERNED_STRING, Bin/bin
         object_id=ObjectId, root_type=interned_string
     }),
     ets:insert(State#state.ets_roots_interned_string, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(_State, <<?HPROF_ROOT_FINALIZING, _/binary>>, _RemainingBytes) ->
     throw({obsolete_tag, hprof_root_finalizing});
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_DEBUGGER, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root debugger~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       Rest/binary>> = Bin,
@@ -784,13 +741,10 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_DEBUGGER, Bin/binary>>, 
         object_id=ObjectId, root_type=debugger
     }),
     ets:insert(State#state.ets_roots_debugger, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(_State, <<?HPROF_ROOT_REFERENCE_CLEANUP, _/binary>>, _RemainingBytes) ->
     throw({obsolete_tag, hprof_root_reference_cleanup});
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_VM_INTERNAL, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root vm internal~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       Rest/binary>> = Bin,
@@ -802,11 +756,8 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_VM_INTERNAL, Bin/binary>
         object_id=ObjectId, root_type=vm_internal
     }),
     ets:insert(State#state.ets_roots_vm_internal, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_JNI_MONITOR, Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: root jni monitor~n"),
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
       ThreadSerial:?UINT32,
@@ -822,8 +773,6 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_JNI_MONITOR, Bin/binary>
         object_id=ObjectId, root_type=jni_monitor
     }),
     ets:insert(State#state.ets_roots_jni_monitor, Root),
-    io:format("Parsed: ~p~n", [Root]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - BytesRead]),
     parse_heap_dump_segments_optimized(State, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(_State, <<?HPROF_UNREACHABLE, _/binary>>, _RemainingBytes) ->
     throw({obsolete_tag, hprof_root_unreachable});
@@ -846,391 +795,7 @@ parse_primitive_array_dump(State, DataType, ElementCount, ObjectId, StackTraceSe
         elements=Elements
     },
     ets:insert(State#state.ets_primitive_array, Array),
-    io:format("Parsed: ~p~n", [Array]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - DataSize]),
     parse_heap_dump_segments_optimized(State, Rest1, RemainingBytes - DataSize).
-
-parse_records(State, Binary) when is_binary(Binary) ->
-    parse_records(State, Binary, []).
-parse_records(_State, <<>>, Acc) ->
-    Acc;
-parse_records(State, Binary, Acc) ->
-    % Each record has the format:
-    % u8: Record type
-    % u32: Microseconds since header timestamp
-    % u32: Size of this record (not including this header)
-    % [u8] data
-    <<RecordType:?UINT8,
-      _Microseconds:?UINT32,
-      RecordSize:?UINT32,
-      Rest/binary>> = Binary,
-    parse_records(State, Rest, Acc, RecordType, RecordSize).
-
-parse_records(State, Rest, Acc, RecordType, RecordSize) ->
-    <<RecordData:RecordSize/binary, Rest1/binary>> = Rest,
-    Acc1 = case parse_record(
-        State,
-        State#state.heap_ref_size,
-        RecordType, RecordData
-    ) of
-        % Instance records come as part of the heap dump segments, so they'll
-        % be in lists. Filter out the non-instances, and just stick the list on
-        % front to be flattened later.
-        L when is_list(L) -> [L|Acc];
-        _ -> Acc
-    end,
-    parse_records(State, Rest1, Acc1).
-
-parse_record(State, RefSize, ?HPROF_TAG_STRING, Binary) ->
-    % Contains an ordinary utf-8 string
-    <<Id:RefSize/big-unsigned-integer-unit:8,
-      Data/binary>> = Binary,
-    % Wrap it in a record
-    Record = #hprof_record_string{
-        id=Id,
-        data=Data
-    },
-    % Save it in the string table
-    ets:insert(State#state.ets_strings, Record),
-    % Also store a backmapping
-    ets:insert(State#state.ets_strings_reverse, {
-        Record#hprof_record_string.data,
-        Record#hprof_record_string.id
-    });
-parse_record(State, RefSize, ?HPROF_TAG_LOAD_CLASS, Binary) ->
-    % Loading a class
-    % u32: Serial number
-    % Ref: Class object ID
-    % u32: Stack trace serial number
-    % Ref: Class name string ID
-    <<Serial:?UINT32,
-      ClassObjId:RefSize/big-unsigned-integer-unit:8,
-      StackSerial:?UINT32,
-      ClassNameId:RefSize/big-unsigned-integer-unit:8
-    >> = Binary,
-    Record = #hprof_record_load_class{
-        serial=Serial,
-        class_object_id=ClassObjId,
-        stack_trace_serial=StackSerial,
-        class_name_string_id=ClassNameId
-    },
-    ets:insert(State#state.ets_class_load, Record);
-parse_record(_State, _RefSize, ?HPROF_TAG_UNLOAD_CLASS, _Binary) ->
-    % Loading a class
-    % We don't really care about these records
-    % u32: Serial number
-    % <<Serial:?UINT32
-    % >> = Raw#hprof_record_raw.raw_data,
-    % Record = #hprof_record_unload_class{
-    %     serial=Serial
-    % },
-    ok;
-parse_record(State, RefSize, ?HPROF_TAG_STACK_FRAME, Binary) ->
-    % Stack frame
-    % Ref: Stack fram ID
-    % Ref: Method name string ID
-    % Ref: Method signature string ID
-    % Ref: Source file name string ID
-    % u32: Class serial number
-    % u32: Location
-    <<FrameId:RefSize/big-unsigned-integer-unit:8,
-      MethodNameStringId:RefSize/big-unsigned-integer-unit:8,
-      MethodSigStringId:RefSize/big-unsigned-integer-unit:8,
-      SourceFileStringId:RefSize/big-unsigned-integer-unit:8,
-      ClassSerial:?UINT32,
-      Location:?UINT32
-    >> = Binary,
-    Record = #hprof_record_stack_frame{
-        frame_id=FrameId,
-        method_name_string_id=MethodNameStringId,
-        method_signature_string_id=MethodSigStringId,
-        source_file_string_id=SourceFileStringId,
-        class_serial=ClassSerial,
-        location=Location
-    },
-    ets:insert(State#state.ets_stack_frame, Record);
-parse_record(State, RefSize, ?HPROF_TAG_STACK_TRACE, Binary) ->
-    % Stack trace
-    % u32: Stack trace serial
-    % u32: Thread serial
-    % u32: Number of frames
-    % [Ref]: Stack fram IDs
-    <<Serial:?UINT32,
-      ThreadSerial:?UINT32,
-      FrameCount:?UINT32,
-      FrameIdsBin/binary
-    >> = Binary,
-    FrameIds = [
-        FrameId || <<FrameId:RefSize/big-unsigned-integer-unit:8>>
-        <= FrameIdsBin
-    ],
-    Record = #hprof_record_stack_trace{
-        serial=Serial,
-        thread_serial=ThreadSerial,
-        frame_count=FrameCount,
-        frame_ids=FrameIds
-    },
-    ets:insert(State#state.ets_stack_trace, Record);
-parse_record(State, RefSize, ?HPROF_TAG_HEAP_DUMP_SEGMENT, Binary) ->
-    parse_heap_dump_segments(State, RefSize, Binary);
-parse_record(_State, _RefSize, ?HPROF_TAG_HEAP_DUMP_END, _Binary) ->
-    % Nothing much doing here
-    ok.
-
-parse_heap_dump_segments(State, RefSize, #hprof_record_raw{raw_data=Bin}) ->
-    _Segments = parse_heap_dump_segments(State, RefSize, Bin, []).
-parse_heap_dump_segments(_State, _RefSize, <<>>, Acc) ->
-    Acc;
-parse_heap_dump_segments(State, RefSize, Bin, Acc) ->
-    {Record, Rest} = parse_heap_dump_segment(State, RefSize, Bin),
-    Acc1 = case Record of
-        I=#hprof_heap_instance_raw{} -> [I|Acc];
-        _ -> Acc
-    end,
-    parse_heap_dump_segments(State, RefSize, Rest, Acc1).
-
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_UNKNOWN, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8, Rest/binary>> = Bin,
-    Root = #hprof_heap_root_unknown{
-        object_id=ObjectId
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=unknown
-    }),
-    ets:insert(State#state.ets_roots_unknown, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_JNI_GLOBAL, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      JniGlobalRefId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_jni_global{
-        object_id=ObjectId,
-        jni_global_ref_id=JniGlobalRefId
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=jni_global
-    }),
-    ets:insert(State#state.ets_roots_jni_global, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_JNI_LOCAL, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      ThreadSerial:?UINT32,
-      FrameNum:?UINT32,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_jni_local{
-        object_id=ObjectId,
-        thread_serial=ThreadSerial,
-        frame_number=FrameNum
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=jni_local
-    }),
-    ets:insert(State#state.ets_roots_jni_local, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_JAVA_FRAME, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      ThreadSerial:?UINT32,
-      FrameNum:?UINT32,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_java_frame{
-        object_id=ObjectId,
-        thread_serial=ThreadSerial,
-        frame_number=FrameNum
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=java_fram
-    }),
-    ets:insert(State#state.ets_roots_java_frame, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_NATIVE_STACK, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      ThreadSerial:?UINT32,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_native_stack{
-        object_id=ObjectId,
-        thread_serial=ThreadSerial
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=native_stack
-    }),
-    ets:insert(State#state.ets_roots_native_stack, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_STICKY_CLASS, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_sticky_class{
-        object_id=ObjectId
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=sticky_class
-    }),
-    ets:insert(State#state.ets_roots_sticky_class, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_THREAD_BLOCK, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      ThreadSerial:?UINT32,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_thread_block{
-        object_id=ObjectId,
-        thread_serial=ThreadSerial
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=thread_block
-    }),
-    ets:insert(State#state.ets_roots_thread_block, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_MONITOR_USED, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_monitor_used{
-        object_id=ObjectId
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=monitor_used
-    }),
-    ets:insert(State#state.ets_roots_monitor_used, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      ThreadSerial:?UINT32,
-      StackTraceSerial:?UINT32,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_thread_object{
-        object_id=ObjectId,
-        thread_serial=ThreadSerial,
-        stack_trace_serial=StackTraceSerial
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=thread_object
-    }),
-    ets:insert(State#state.ets_roots_thread_object, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_CLASS_DUMP, Bin/binary>>) ->
-    {Class, Rest} = parse_class_dump_segment(RefSize, Bin),
-    ets:insert(State#state.ets_class_dump, Class),
-    {ok, Rest};
-parse_heap_dump_segment(_State, RefSize, <<?HPROF_INSTANCE_DUMP, Bin/binary>>) ->
-    % Can't actually parse these until we have the class dump data
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      StackTraceSerial:?UINT32,
-      ClassObjectId:RefSize/big-unsigned-integer-unit:8,
-      DataSize:?UINT32,
-      Rest/binary>> = Bin,
-    <<Data:DataSize/binary, Rest1/binary>> = Rest,
-    Instance = #hprof_heap_instance_raw{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        class_object_id=ClassObjectId,
-        data=Data
-    },
-    {Instance, Rest1};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      StackTraceSerial:?UINT32,
-      ElementCount:?UINT32,
-      ElementClassObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    DataSize = ElementCount * RefSize,
-    <<ArrayData:DataSize/binary, Rest1/binary>> = Rest,
-    Elements = [
-        Elem || <<Elem:RefSize/big-unsigned-integer-unit:8>>
-        <= ArrayData
-    ],
-    Array = #hprof_object_array{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        element_class_object_id=ElementClassObjectId,
-        elements=Elements
-    },
-    ets:insert(State#state.ets_object_array, Array),
-    {ok, Rest1};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      StackTraceSerial:?UINT32,
-      ElementCount:?UINT32,
-      DataType:?UINT8,
-      Rest/binary>> = Bin,
-    ElementSize = primitive_size(RefSize, DataType),
-    DataSize = ElementCount * ElementSize,
-    <<ArrayData:DataSize/binary, Rest1/binary>> = Rest,
-    Elements = [
-        parse_primitive(DataType, Elem) || <<Elem:ElementSize/binary>>
-        <= ArrayData
-    ],
-    Array = #hprof_primitive_array{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        element_type=DataType,
-        elements=Elements
-    },
-    ets:insert(State#state.ets_primitive_array, Array),
-    {ok, Rest1};
-parse_heap_dump_segment(_State, RefSize, <<?HPROF_HEAP_DUMP_INFO, Bin/binary>>) ->
-    % Not currently tracking which heap things are in
-    <<_HeapType:?UINT32,
-      _HeapNameStringId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    % Info = #hprof_heap_dump_info{
-    %     heap_type=HeapType,
-    %     heap_type_string_id=HeapNameStringId
-    % },
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_INTERNED_STRING, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_interned_string{
-        object_id=ObjectId
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=interned_string
-    }),
-    ets:insert(State#state.ets_roots_interned_string, Root),
-    {ok, Rest};
-parse_heap_dump_segment(_State, _RefSize, <<?HPROF_ROOT_FINALIZING, _/binary>>) ->
-    throw({obsolete_tag, hprof_root_finalizing});
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_DEBUGGER, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_debugger{
-        object_id=ObjectId
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=debugger
-    }),
-    ets:insert(State#state.ets_roots_debugger, Root),
-    {ok, Rest};
-parse_heap_dump_segment(_State, _RefSize, <<?HPROF_ROOT_REFERENCE_CLEANUP, _/binary>>) ->
-    throw({obsolete_tag, hprof_root_reference_cleanup});
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_VM_INTERNAL, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_vm_internal{
-        object_id=ObjectId
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=vm_internal
-    }),
-    ets:insert(State#state.ets_roots_vm_internal, Root),
-    {ok, Rest};
-parse_heap_dump_segment(State, RefSize, <<?HPROF_ROOT_JNI_MONITOR, Bin/binary>>) ->
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      ThreadSerial:?UINT32,
-      FrameNum:?UINT32,
-      Rest/binary>> = Bin,
-    Root = #hprof_heap_root_jni_monitor{
-        object_id=ObjectId,
-        thread_serial=ThreadSerial,
-        frame_number=FrameNum
-    },
-    ets:insert(State#state.ets_roots, #hprof_root{
-        object_id=ObjectId, root_type=jni_monitor
-    }),
-    ets:insert(State#state.ets_roots_jni_monitor, Root),
-    {ok, Rest};
-parse_heap_dump_segment(_State, _RefSize, <<?HPROF_UNREACHABLE, _/binary>>) ->
-    throw({obsolete_tag, hprof_root_unreachable});
-parse_heap_dump_segment(_State, _RefSize, <<?HPROF_PRIMITIVE_ARRAY_NODATA_DUMP, _/binary>>) ->
-    throw({obsolete_tag, hprof_primitive_array_nodata_dump}).
 
 primitive_size(RefSize, ?HPROF_BASIC_OBJECT) -> RefSize;
 primitive_size(_, ?HPROF_BASIC_BOOLEAN) -> 1;
@@ -1316,8 +881,6 @@ parse_class_dump_segment_optimized(State, <<Bin/binary>>, RemainingBytes) ->
         4 % The UINT16s for number of static/instance fields
     ),
 
-    io:format("Parsed: ~p~n", [Class]),
-    io:format("Bytes remaining: ~p~n", [RemainingBytes - TotalBytesRead]),
     parse_heap_dump_segments_optimized(State, Rest6, RemainingBytes - TotalBytesRead).
 
 parse_class_dump_segment(RefSize, Bin) ->
