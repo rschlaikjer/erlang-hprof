@@ -699,8 +699,10 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/bin
       DataType:?UINT8,
       Rest/binary>> = Bin,
     BytesRead = 1 + RefSize + 9,
+    RefSize = State#state.heap_ref_size,
+    ElementSize = primitive_size(RefSize, DataType),
     parse_primitive_array_dump(
-        State, DataType, ElementCount, ObjectId,
+        State, DataType, ElementCount, ElementSize, ObjectId,
         StackTraceSerial, Rest, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_HEAP_DUMP_INFO, Bin/binary>>, RemainingBytes) ->
     % Not currently tracking which heap things are in
@@ -779,9 +781,7 @@ parse_heap_dump_segments_optimized(_State, <<?HPROF_UNREACHABLE, _/binary>>, _Re
 parse_heap_dump_segments_optimized(_State, <<?HPROF_PRIMITIVE_ARRAY_NODATA_DUMP, _/binary>>, _RemainingBytes) ->
     throw({obsolete_tag, hprof_primitive_array_nodata_dump}).
 
-parse_primitive_array_dump(State, DataType, ElementCount, ObjectId, StackTraceSerial, <<Binary/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    ElementSize = primitive_size(RefSize, DataType),
+parse_primitive_array_dump(State, DataType, ElementCount, ElementSize, ObjectId, StackTraceSerial, <<Binary/binary>>, RemainingBytes) ->
     DataSize = ElementCount * ElementSize,
     <<ArrayData:DataSize/binary, Rest1/binary>> = Binary,
     Elements = [
