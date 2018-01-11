@@ -373,7 +373,7 @@ extract_instance_id_fields(RefSize, [Field|Fields], Binary, Acc) ->
     Value = #hprof_instance_field{
         name_string_id=Name,
         type=Type,
-        value=parse_primitive(Type, PrimitiveBin)
+        value=parse_primitive(PrimitiveBin, Type)
     },
     extract_instance_id_fields(
         RefSize, Fields, Rest, maps:put(Name, Value, Acc)
@@ -836,7 +836,7 @@ parse_primitive_array_dump(State, DataType, ElementCount, ObjectId, StackTraceSe
     DataSize = ElementCount * ElementSize,
     <<ArrayData:DataSize/binary, Rest1/binary>> = Binary,
     Elements = [
-        parse_primitive(DataType, Elem) || <<Elem:ElementSize/binary>>
+        parse_primitive(Elem, DataType) || <<Elem:ElementSize/binary>>
         <= ArrayData
     ],
     Array = #hprof_primitive_array{
@@ -1242,25 +1242,24 @@ primitive_size(_, ?HPROF_BASIC_SHORT) -> 2;
 primitive_size(_, ?HPROF_BASIC_INT) -> 4;
 primitive_size(_, ?HPROF_BASIC_LONG) -> 8.
 
-parse_primitive(?HPROF_BASIC_OBJECT, <<V:?UINT32>>) -> V;
-parse_primitive(?HPROF_BASIC_OBJECT, <<V:?UINT64>>) -> V;
-parse_primitive(?HPROF_BASIC_BOOLEAN, <<V:?UINT8>>) -> V;
-parse_primitive(?HPROF_BASIC_CHAR, Bin) -> Bin;
-parse_primitive(?HPROF_BASIC_FLOAT, <<255, 128, 0, 0>>) -> minus_infinity;
-parse_primitive(?HPROF_BASIC_FLOAT, <<127, 128, 0, 0>>) -> infinity;
-parse_primitive(?HPROF_BASIC_FLOAT, <<127, 192, 0, 0>>) -> nan;
-parse_primitive(?HPROF_BASIC_FLOAT, <<V:32/float>>) -> V;
-parse_primitive(?HPROF_BASIC_DOUBLE, <<255,240,0,0,0,0,0,0>>) -> minus_infinity;
-parse_primitive(?HPROF_BASIC_DOUBLE, <<127,248,0,0,0,0,0,0>>) -> infinity;
-parse_primitive(?HPROF_BASIC_DOUBLE, <<127,240,0,0,0,0,0,0>>) -> nan;
-parse_primitive(?HPROF_BASIC_DOUBLE, <<V:64/float>>) -> V;
-parse_primitive(?HPROF_BASIC_BYTE, <<V:?INT8>>) -> V;
-parse_primitive(?HPROF_BASIC_SHORT, <<V:?INT16>>) -> V;
-parse_primitive(?HPROF_BASIC_INT, <<V:?INT32>>) -> V;
-parse_primitive(?HPROF_BASIC_LONG, <<V:?INT64>>) -> V.
+parse_primitive(<<V:?UINT32>>, ?HPROF_BASIC_OBJECT) -> V;
+parse_primitive(<<V:?UINT64>>, ?HPROF_BASIC_OBJECT) -> V;
+parse_primitive(<<V:?UINT8>>, ?HPROF_BASIC_BOOLEAN) -> V;
+parse_primitive(<<AH:1/binary, AL:1/binary>>, ?HPROF_BASIC_CHAR) -> <<AH/binary, AL/binary>>;
+parse_primitive(<<255, 128, 0, 0>>, ?HPROF_BASIC_FLOAT) -> minus_infinity;
+parse_primitive(<<127, 128, 0, 0>>, ?HPROF_BASIC_FLOAT) -> infinity;
+parse_primitive(<<127, 192, 0, 0>>, ?HPROF_BASIC_FLOAT) -> nan;
+parse_primitive(<<V:32/float>>, ?HPROF_BASIC_FLOAT) -> V;
+parse_primitive(<<255,240,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> minus_infinity;
+parse_primitive(<<127,248,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> infinity;
+parse_primitive(<<127,240,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> nan;
+parse_primitive(<<V:64/float>>, ?HPROF_BASIC_DOUBLE) -> V;
+parse_primitive(<<V:?INT8>>, ?HPROF_BASIC_BYTE) -> V;
+parse_primitive(<<V:?INT16>>, ?HPROF_BASIC_SHORT) -> V;
+parse_primitive(<<V:?INT32>>, ?HPROF_BASIC_INT) -> V;
+parse_primitive(<<V:?INT64>>, ?HPROF_BASIC_LONG) -> V.
 
 parse_class_dump_segment_optimized(State, <<Bin/binary>>, RemainingBytes) ->
-    io:format("Seg: class dump~n"),
     RefSize = State#state.heap_ref_size,
     <<ClassObjId:RefSize/big-unsigned-integer-unit:8,
       StackTraceSerial:?UINT32,
@@ -1373,7 +1372,7 @@ parse_class_dump_constants(RefSize, NumConstants, Binary, Acc, BytesConsumed) ->
     >> = Binary,
     FieldSize = primitive_size(RefSize, Type),
     <<FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
-    FieldData = parse_primitive(Type, FieldDataBin),
+    FieldData = parse_primitive(FieldDataBin, Type),
     Field = #hprof_constant_field{
         constant_pool_index=ConstantPoolIndex,
         type=Type,
@@ -1395,7 +1394,7 @@ parse_class_dump_static_fields(RefSize, NumStatics, Binary, Acc, BytesConsumed) 
     >> = Binary,
     FieldSize = primitive_size(RefSize, Type),
     <<FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
-    FieldData = parse_primitive(Type, FieldDataBin),
+    FieldData = parse_primitive(FieldDataBin, Type),
     Field = #hprof_static_field{
         name_string_id=FieldNameStringId,
         type=Type,
