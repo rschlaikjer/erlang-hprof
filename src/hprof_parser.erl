@@ -10,7 +10,6 @@
     parse_binary/1,
     close/1,
     get_primitive_arrays/1,
-    print_class/2,
     get_string/2,
     get_instances_for_class/2,
     get_bitmaps/1,
@@ -33,16 +32,10 @@
     heap_ref_size :: 4 | 8,
     dump_timestamp_ms :: pos_integer(),
 
-    % List of instance records that need to be revisited and parsed
-    raw_instance_records = [],
-
     % String table
     ets_strings :: reference(),
     % Reverse mapping of strings -> IDs
     ets_strings_reverse :: reference(),
-
-    % Parsed instances
-    ets_heap_instance :: reference(),
 
     % Various data
     ets_class_load :: reference(),
@@ -74,22 +67,6 @@
 
 %% Public API
 
-print_class(Pid, ClassId) ->
-    Class = get_class_dump(Pid, ClassId),
-    Statics = Class#hprof_class_dump.static_fields,
-    Instances = Class#hprof_class_dump.instance_fields,
-    StaticNames = [
-        get_string(Pid, Sid) || #hprof_static_field{name_string_id=Sid}
-        <- Statics
-    ],
-    InstanceFieldNames = [
-        get_string(Pid, Sid) || #hprof_instance_field{name_string_id=Sid}
-        <- Instances
-    ],
-
-    io:format("Class statics: ~p~n", [StaticNames]),
-    io:format("Class instance: ~p~n", [InstanceFieldNames]).
-
 parse_file(Filename) ->
     gen_server:start_link(?MODULE, [{file, Filename}], []).
 
@@ -108,11 +85,8 @@ get_primitive_array(Pid, ObjectId) when is_pid(Pid) ->
 get_string(Pid, StringId) when is_pid(Pid) ->
     gen_server:call(Pid, {get_string, StringId}).
 
-get_class_dump(Pid, ClassId) when is_pid(Pid) ->
-    gen_server:call(Pid, {get_class, ClassId}).
-
 get_instances_for_class(Pid, ClassName) when is_pid(Pid) and is_binary(ClassName) ->
-    gen_server:call(Pid, {get_instances_for_class, ClassName}, infinity).
+    gen_server:call(Pid, {get_instances_for_class, ClassName, self()}, infinity).
 
 get_bitmaps(Pid) when is_pid(Pid) ->
     gen_server:call(Pid, get_bitmaps, infinity).
@@ -147,20 +121,21 @@ handle_call({get_class, ClassId}, _From, State) ->
         [S|_] -> S
     end,
     {reply, Result, State};
-handle_call({get_instances_for_class, ClassName}, _From, State) ->
-    Result = get_instances_for_class_impl(State, ClassName),
-    {reply, Result, State};
+handle_call({get_instances_for_class, ClassName, Caller}, _From, State) ->
+    Ref = make_ref(),
+    gen_server:cast(self(), {get_instances_for_class, ClassName, Caller, Ref}),
+    {reply, {ok, Ref}, State};
 handle_call(get_bitmaps, _From, State) ->
     Result = get_bitmaps_impl(State),
-    {reply, Result, State};
-handle_call({get_instance, InstanceId}, _From, State) ->
-    Result = get_heap_instance(State, InstanceId),
     {reply, Result, State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
+handle_cast({get_instances_for_class, ClassName, Caller, Ref}, State) ->
+    get_instances_for_class_impl(State, ClassName, Caller, Ref),
+    {noreply, State};
 handle_cast({parse_file, Filename}, State) ->
-    State1 = parse_file(State, Filename),
+    State1 = parse_file_impl(State, Filename),
     {noreply, State1};
 handle_cast({parse_binary, Binary}, State) ->
     State1 = parse_binary(State, Binary),
@@ -179,7 +154,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Implementation
 
-parse_file(State, Filename) ->
+parse_file_impl(State, Filename) ->
     {ok, Bin} = file:read_file(Filename),
     parse_binary(State, Bin).
 
@@ -194,7 +169,6 @@ init_ets(State) ->
         ets_strings = ets:new(strings, [set, {keypos, 2}]),
         ets_strings_reverse = ets:new(strings_reverse, [set]),
         ets_class_load = ets:new(class_load, [set, {keypos, 2}]),
-        ets_heap_instance = ets:new(heap_instance, [set, {keypos, 2}, compressed]),
         ets_stack_frame = ets:new(stack_frame, [set, {keypos, 2}]),
         ets_stack_trace = ets:new(stack_trace, [set, {keypos, 2}]),
         ets_object_array = ets:new(object_array, [set, {keypos, 2}, compressed]),
@@ -218,32 +192,32 @@ init_ets(State) ->
     }.
 
 get_bitmaps_impl(State) ->
-    case get_instances_for_class_impl(State, <<"android.graphics.Bitmap">>) of
-        {error, Reason} -> {error, Reason};
-        {ok, Instances} ->
-            % Get the string IDs for the properties we care about
-            MWidth = get_id_for_string(State, <<"mWidth">>),
-            MHeight = get_id_for_string(State, <<"mHeight">>),
-            MBuffer = get_id_for_string(State, <<"mBuffer">>),
-            % If any of those strings don't exist, something is wrong
-            case lists:any(fun(X) -> X =:= not_found end, [MWidth, MHeight, MBuffer]) of
-                true ->
-                    {error, string_table_incomplete};
-                false ->
-                    Bitmaps = [{bitmap,
-                      maps:get(MWidth, Values),
-                      maps:get(MHeight, Values),
-                      maps:get(MBuffer, Values)} ||
-                      #hprof_heap_instance{instance_values=Values}
-                      <- Instances
-                    ],
-                    [Bmp || Bmp={bitmap, W, H, B} <- Bitmaps,
-                     W =/= not_found,
-                     H =/= not_found,
-                     B =/= not_found]
-            end
-    end.
-
+    ok.
+%     case get_instances_for_class_impl(State, <<"android.graphics.Bitmap">>) of
+%         {error, Reason} -> {error, Reason};
+%         {ok, Instances} ->
+%             % Get the string IDs for the properties we care about
+%             MWidth = get_id_for_string(State, <<"mWidth">>),
+%             MHeight = get_id_for_string(State, <<"mHeight">>),
+%             MBuffer = get_id_for_string(State, <<"mBuffer">>),
+%             % If any of those strings don't exist, something is wrong
+%             case lists:any(fun(X) -> X =:= not_found end, [MWidth, MHeight, MBuffer]) of
+%                 true ->
+%                     {error, string_table_incomplete};
+%                 false ->
+%                     Bitmaps = [{bitmap,
+%                       maps:get(MWidth, Values),
+%                       maps:get(MHeight, Values),
+%                       maps:get(MBuffer, Values)} ||
+%                       #hprof_heap_instance{instance_values=Values}
+%                       <- Instances
+%                     ],
+%                     [Bmp || Bmp={bitmap, W, H, B} <- Bitmaps,
+%                      W =/= not_found,
+%                      H =/= not_found,
+%                      B =/= not_found]
+%             end
+%     end.
 
 get_id_for_string(State, String) when is_binary(String) ->
     case ets:lookup(State#state.ets_strings_reverse, String) of
@@ -251,31 +225,22 @@ get_id_for_string(State, String) when is_binary(String) ->
         [{_, Id}] -> Id
     end.
 
-get_heap_instance(State, Id) ->
-    case ets:lookup(State#state.ets_heap_instance, Id) of
-        [] -> not_found;
-        [Instance] -> Instance
-    end.
-
-get_instances_for_class_impl(State, ClassName) ->
+get_instances_for_class_impl(State, ClassName, Caller, Ref) ->
     % Get the string ID for the class name
-    case ets:lookup(State#state.ets_strings_reverse, ClassName) of
-        [] -> {error, class_name_not_found};
-        [{_, StringId}] ->
-            % Now find the class object for this string ID
+    Result = case get_id_for_string(State, ClassName) of
+        not_found -> {hprof_parser, Ref, {error, class_name_not_found}};
+        StringId ->
             case get_class_obj_by_name_id(State, StringId) of
-                not_found -> {error, class_not_found};
-                #hprof_class_dump{class_object=COD} ->
-                    {ok, get_instances_with_class_object_id(State, COD)}
+                not_found -> {hprof_parser, Ref, {error, class_obj_not_found}};
+                ClassObj ->
+                    get_instances_for_class_obj(State, ClassObj, Caller, Ref),
+                    {hprof_parser, Ref, ok}
             end
-    end.
+    end,
+    Caller ! Result.
 
-get_instances_with_class_object_id(State, ClsObjId) ->
-    ets:select(
-        State#state.ets_heap_instance,
-        ets:fun2ms(
-          fun(F=#hprof_heap_instance{class_object_id=CID}) when ClsObjId =:= CID -> F end)
-     ).
+get_instances_for_class_obj(State, ClassObj, Caller, Ref) ->
+    ok.
 
 get_class_obj_by_name_id(State, StringId) ->
     % Need to use the class load records to get the class object ID
@@ -306,33 +271,7 @@ parse_header(State, Bindata) ->
         heap_ref_size = HeapRefSize,
         dump_timestamp_ms = DumpTimeMs
     },
-    parse_binary_with_header(State1, Rest).
-
-parse_binary_with_header(State, <<RecordsBinary/binary>>) ->
-    % Do our first parsing pass, which handles all the record types except for
-    % the instances, which can only be dealt with once we have all the class
-    % definitions. The parse_records method will insert non-instance records
-    % directly into ETS.
-    State1 = parse_records_optimized(State, RecordsBinary),
-
-    io:format("First pass finished.~n"),
-
-
-    % Now that we have all these instance records, parse them and hoover
-    % them all into ETS.
-    lists:foreach(
-        fun(R=#hprof_heap_instance_raw{}) ->
-            ets:insert(
-                State2#state.ets_heap_instance,
-                parse_instance_record(State1, R)
-            )
-        end,
-        State1#state.raw_instance_records
-    ),
-
-    erlang:garbage_collect(),
-    io:format("Finished loading~n"),
-    State1.
+    parse_records_optimized(State1, Rest).
 
 parse_instance_record(State, R=#hprof_heap_instance_raw{}) ->
     % Break out the record data
@@ -648,25 +587,23 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binar
 parse_heap_dump_segments_optimized(State, <<?HPROF_CLASS_DUMP, Bin/binary>>, RemainingBytes) ->
     parse_class_dump_segment_optimized(State, Bin, RemainingBytes - 1);
 parse_heap_dump_segments_optimized(State, <<?HPROF_INSTANCE_DUMP, Bin/binary>>, RemainingBytes) ->
-    % Can't actually parse these until we have the class dump data
+    % Can't actually parse these during the first pass, since they come *before*
+    % the class definitions
     RefSize = State#state.heap_ref_size,
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      StackTraceSerial:?UINT32,
-      ClassObjectId:RefSize/big-unsigned-integer-unit:8,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _StackTraceSerial:?UINT32,
+      _ClassObjectId:RefSize/big-unsigned-integer-unit:8,
       DataSize:?UINT32,
       Rest/binary>> = Bin,
-    <<Data:DataSize/binary, Rest1/binary>> = Rest,
+    <<_Data:DataSize/binary, Rest1/binary>> = Rest,
     BytesRead = 1 + RefSize + 4 + RefSize + 4 + DataSize,
-    Instance = #hprof_heap_instance_raw{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        class_object_id=ClassObjectId,
-        data=Data
-    },
-    State1 = State#state{
-        raw_instance_records=[Instance|State#state.raw_instance_records]
-    },
-    parse_heap_dump_segments_optimized(State1, Rest1, RemainingBytes - BytesRead);
+    % Instance = #hprof_heap_instance_raw{
+    %     object_id=ObjectId,
+    %     stack_trace_serial=StackTraceSerial,
+    %     class_object_id=ClassObjectId,
+    %     data=Data
+    % },
+    parse_heap_dump_segments_optimized(State, Rest1, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
     RefSize = State#state.heap_ref_size,
     <<ObjectId:RefSize/big-unsigned-integer-unit:8,
