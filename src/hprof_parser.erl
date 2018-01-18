@@ -28,6 +28,9 @@
 ]).
 
 -record(state, {
+    % The HPROF binary data itseIf
+    hprof_data :: binary(),
+
     % Basic information about the dump file
     heap_ref_size :: 4 | 8,
     dump_timestamp_ms :: pos_integer(),
@@ -240,7 +243,214 @@ get_instances_for_class_impl(State, ClassName, Caller, Ref) ->
     Caller ! Result.
 
 get_instances_for_class_obj(State, ClassObj, Caller, Ref) ->
-    ok.
+    <<?HPROF_HEADER_MAGIC,
+      _HeapRefSize:?UINT32,
+      _DumpTimeMs:?UINT64,
+      Rest/binary >> = State#state.hprof_data,
+    get_instances_for_class_obj_records(State, ClassObj, Caller, Ref, Rest).
+
+get_instances_for_class_obj_records(_State, _ClassObj, _Caller, _Ref, <<>>) ->
+    ok;
+get_instances_for_class_obj_records(State, ClassObj, Caller, Ref, <<Binary/binary>>) ->
+    <<RecordType:?UINT8,
+      _Microseconds:?UINT32,
+      RecordSize:?UINT32,
+      Rest/binary>> = Binary,
+    get_instances_for_class_obj_record(State, ClassObj, Caller, Ref, Rest, RecordSize, RecordType).
+
+get_instances_for_class_obj_record(State, ClassObj, Caller, Ref, <<Binary/binary>>, RecordSize, ?HPROF_TAG_HEAP_DUMP_SEGMENT) ->
+    get_instances_for_class_obj_heap_seg(State, ClassObj, Caller, Ref, Binary, RecordSize);
+get_instances_for_class_obj_record(State, ClassObj, Caller, Ref, <<Binary/binary>>, RecordSize, _RecordType) ->
+    <<_Record:RecordSize/binary, Rest/binary>> = Binary,
+    get_instances_for_class_obj_records(State, ClassObj, Caller, Ref, Rest).
+
+get_instances_for_class_obj_heap_seg(State, ClassObj, Caller, Ref, <<Binary/binary>>, 0) ->
+    get_instances_for_class_obj_records(State, ClassObj, Caller, Ref, Binary);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_UNKNOWN, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_JNI_GLOBAL, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _JniGlobalRefId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + (RefSize * 2),
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_JNI_LOCAL, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _ThreadSerial:?UINT32,
+      _FrameNum:?UINT32,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize + 8,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_JAVA_FRAME, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _ThreadSerial:?UINT32,
+      _FrameNum:?UINT32,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize + 8,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_NATIVE_STACK, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _ThreadSerial:?UINT32,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize + 4,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_STICKY_CLASS, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_THREAD_BLOCK, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _ThreadSerial:?UINT32,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize + 4,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_MONITOR_USED, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _ThreadSerial:?UINT32,
+      _StackTraceSerial:?UINT32,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize + 8,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_CLASS_DUMP, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ClassObjId:RefSize/big-unsigned-integer-unit:8,
+      _StackTraceSerial:?UINT32,
+      _SuperClassObjId:RefSize/big-unsigned-integer-unit:8,
+      _ClassLoaderObjId:RefSize/big-unsigned-integer-unit:8,
+      _Signer:RefSize/big-unsigned-integer-unit:8,
+      _ProtDomain:RefSize/big-unsigned-integer-unit:8,
+      _Reserved1:RefSize/big-unsigned-integer-unit:8,
+      _Reserved2:RefSize/big-unsigned-integer-unit:8,
+      _InstanceSize:?UINT32,
+      NumConstants:?UINT16,
+      Rest1/binary>> = Bin,
+    HeaderBytesRead = RefSize + 4 + RefSize * 6 + 4 + 2 + 1,
+
+    % Constants
+    {ConstantBytes, Rest2} = skip_constants(State, Rest1, NumConstants),
+
+    % Statics
+    <<NumStatics:?UINT16, Rest3/binary>> = Rest2,
+    {StaticBytes, Rest4} = skip_statics(State, Rest3, NumStatics),
+
+    % Instance vars
+    <<NumInstances:?UINT16, Rest5/binary>> = Rest4,
+    {InstanceBytes, Rest6} = skip_instances(State, Rest5, NumInstances),
+
+    BytesLeft = RemainingBytes - (
+        HeaderBytesRead + ConstantBytes + 2 + StaticBytes + 2 + InstanceBytes
+    ),
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest6, BytesLeft);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_INSTANCE_DUMP, Bin/binary>>, RemainingBytes) ->
+    % Can't actually parse these during the first pass, since they come *before*
+    % the class definitions
+    RefSize = State#state.heap_ref_size,
+    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
+      StackTraceSerial:?UINT32,
+      ClassObjectId:RefSize/big-unsigned-integer-unit:8,
+      DataSize:?UINT32,
+      Rest/binary>> = Bin,
+    <<Data:DataSize/binary, Rest1/binary>> = Rest,
+    BytesRead = 1 + RefSize + 4 + RefSize + 4 + DataSize,
+    case ClsObj#hprof_class_dump.class_object =:= ClassObjectId of
+        true ->
+            Instance = parse_instance_record(State, #hprof_heap_instance_raw{
+                object_id=ObjectId,
+                stack_trace_serial=StackTraceSerial,
+                class_object_id=ClassObjectId,
+                data=Data
+            }),
+            Caller ! {hprof_parser, Ref, Instance};
+        false -> ok
+    end,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest1, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _StackTraceSerial:?UINT32,
+      ElementCount:?UINT32,
+      _ElementClassObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    DataSize = ElementCount * RefSize,
+    <<_ArrayData:DataSize/binary, Rest1/binary>> = Rest,
+    BytesRead = 1 + RefSize + 8 + RefSize + DataSize,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest1, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _StackTraceSerial:?UINT32,
+      ElementCount:?UINT32,
+      DataType:?UINT8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize + 9,
+    RefSize = State#state.heap_ref_size,
+    ElementSize = primitive_size(RefSize, DataType),
+    ArraySize = ElementSize * ElementCount,
+    <<_ArrayData:ArraySize/binary, Rest1/binary>> = Rest,
+    get_instances_for_class_obj_heap_seg(
+        State, ClsObj, Caller, Ref, Rest1,
+        RemainingBytes - (BytesRead + ArraySize));
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_HEAP_DUMP_INFO, Bin/binary>>, RemainingBytes) ->
+    % Not currently tracking which heap things are in
+    RefSize = State#state.heap_ref_size,
+    <<_HeapType:?UINT32,
+      _HeapNameStringId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + 4 + RefSize,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_INTERNED_STRING, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(_State, ClsObj, Caller, Ref, <<?HPROF_ROOT_FINALIZING, _/binary>>, _RemainingBytes) ->
+    throw({obsolete_tag, hprof_root_finalizing});
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_DEBUGGER, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(_State, ClsObj, Caller, Ref, <<?HPROF_ROOT_REFERENCE_CLEANUP, _/binary>>, _RemainingBytes) ->
+    throw({obsolete_tag, hprof_root_reference_cleanup});
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_VM_INTERNAL, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_JNI_MONITOR, Bin/binary>>, RemainingBytes) ->
+    RefSize = State#state.heap_ref_size,
+    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
+      _ThreadSerial:?UINT32,
+      _FrameNum:?UINT32,
+      Rest/binary>> = Bin,
+    BytesRead = 1 + RefSize + 8,
+    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
+get_instances_for_class_obj_heap_seg(_State, ClsObj, Caller, Ref, <<?HPROF_UNREACHABLE, _/binary>>, _RemainingBytes) ->
+    throw({obsolete_tag, hprof_root_unreachable});
+get_instances_for_class_obj_heap_seg(_State, ClsObj, Caller, Ref, <<?HPROF_PRIMITIVE_ARRAY_NODATA_DUMP, _/binary>>, _RemainingBytes) ->
+    throw({obsolete_tag, hprof_primitive_array_nodata_dump}).
+
 
 get_class_obj_by_name_id(State, StringId) ->
     % Need to use the class load records to get the class object ID
@@ -255,8 +465,48 @@ get_class_obj_by_name_id(State, StringId) ->
             end
     end.
 
+
+skip_constants(State, <<Binary/binary>>, NumConstants) ->
+    skip_constants(State, Binary, NumConstants, 0).
+skip_constants(_State, <<Binary/binary>>, 0, BytesRead) ->
+    {BytesRead, Binary};
+skip_constants(State, <<Binary/binary>>, NumConstants, BytesRead) ->
+    <<_ConstantPoolIndex:?UINT16,
+      Type:?UINT8,
+      Rest/binary
+    >> = Binary,
+    FieldSize = primitive_size(State#state.heap_ref_size, Type),
+    <<_FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
+    skip_constants(State, Rest1, NumConstants - 1, BytesRead + FieldSize + 3).
+
+skip_statics(State, <<Binary/binary>>, NumStatics) ->
+    skip_statics(State, Binary, NumStatics, 0).
+skip_statics(_State, <<Binary/binary>>, 0, BytesRead) ->
+    {BytesRead, Binary};
+skip_statics(State, <<Binary/binary>>, NumStatics, BytesRead) ->
+    RefSize = State#state.heap_ref_size,
+    <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
+      Type:?UINT8,
+      Rest/binary
+    >> = Binary,
+    FieldSize = primitive_size(RefSize, Type),
+    <<_FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
+    skip_statics(State, Rest1, NumStatics-1, BytesRead + 1 + RefSize + FieldSize).
+
+skip_instances(State, <<Binary/binary>>, NumFields) ->
+    skip_instances(State, Binary, NumFields, 0).
+skip_instances(_State, <<Binary/binary>>, 0, BytesRead) ->
+    {BytesRead, Binary};
+skip_instances(State, <<Binary/binary>>, NumFields, BytesRead) ->
+    RefSize = State#state.heap_ref_size,
+    <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
+      _Type:?UINT8,
+      Rest/binary
+    >> = Binary,
+    skip_instances(State, Rest, NumFields - 1, BytesRead + RefSize + 1).
+
 parse_binary(State, Bin) ->
-    parse_header(State, Bin).
+    parse_header(State#state{hprof_data=Bin}, Bin).
 
 parse_header(State, Bindata) ->
     % Header has the format:
