@@ -1,6 +1,8 @@
 -module(hprof_bitmap).
+-include("include/records.hrl").
 
 -export([
+    make_png/2,
     make_png/4
 ]).
 
@@ -17,14 +19,39 @@
 -define(PNG_ARGB, 6).
 -define(PNG_RGB, 2).
 
+make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
+    Width = maps:get(<<"mWidth">>, V, not_found),
+    Height = maps:get(<<"mHeight">>, V, not_found),
+    Buffer = maps:get(<<"mBuffer">>, V, not_found),
+    case lists:any(fun(A) -> A =:= not_found end, [Width, Height, Buffer]) of
+        true ->
+            {error, bad_bitmap};
+        false ->
+            case hprof_parser:get_primitive_array(
+                Parser, Buffer#hprof_instance_field.value
+            ) of
+                not_found -> {error, missing_primitive_array};
+                #hprof_primitive_array{elements=E} ->
+                    Bytes = << <<X>> || X <- E>>,
+                    make_png(
+                        ?BITMAP_MODE_ARGB_8888,
+                        Width#hprof_instance_field.value,
+                        Height#hprof_instance_field.value,
+                        Bytes
+                    )
+            end
+    end.
+
 make_png(Mode, Width, Height, Data) ->
     Header = make_header(Mode, Width, Height),
     PixelData = encode_pixel_data(Mode, Width, Data),
     Footer = crc_chunk(?PNG_END, <<>>),
-    <<?PNG_HEADER,  % Fixed PNG header
-      Header/binary,
-      PixelData/binary,
-      Footer/binary>>.
+    PngBinary = <<
+        ?PNG_HEADER,  % Fixed PNG header
+        Header/binary,
+        PixelData/binary,
+        Footer/binary>>,
+    {ok, PngBinary}.
 
 encode_pixel_data(?BITMAP_MODE_ARGB_8888, Width, Data) ->
     Zlib = zlib:open(),
