@@ -9,11 +9,13 @@
     parse_file/1,
     parse_binary/1,
     close/1,
-    get_primitive_arrays/1,
+    % Fetch a single string from the string table
     get_string/2,
+    % Fetch all heap instances. Response is streamed.
+    get_all_instances/1,
+    % Fetch instances matching a specific class name. Streamed.
     get_instances_for_class/2,
-    get_bitmaps/1,
-    get_instance/2,
+    % Fetch a primitive array, by ID
     get_primitive_array/2
 ]).
 
@@ -34,6 +36,8 @@
     % Basic information about the dump file
     heap_ref_size :: 4 | 8,
     dump_timestamp_ms :: pos_integer(),
+
+    instances = [],
 
     % String table
     ets_strings :: reference(),
@@ -77,25 +81,21 @@ parse_binary(Binary) when is_binary(Binary) ->
     gen_server:start_link(?MODULE, [{binary, Binary}], []).
 
 close(Pid) when is_pid(Pid) ->
-    gen_server:call(Pid, close).
-
-get_primitive_arrays(Pid) when is_pid(Pid) ->
-    gen_server:call(Pid, get_primitive_arrays, infinity).
+    call(Pid, close).
 
 get_primitive_array(Pid, ObjectId) when is_pid(Pid) ->
-    gen_server:call(Pid, {get_primitive_array, ObjectId}, infinity).
+    call(Pid, {get_primitive_array, ObjectId}).
 
 get_string(Pid, StringId) when is_pid(Pid) ->
-    gen_server:call(Pid, {get_string, StringId}).
+    call(Pid, {get_string, StringId}).
+
+get_all_instances(Pid) when is_pid(Pid) ->
+    call(Pid, {get_all_instances, self()}).
 
 get_instances_for_class(Pid, ClassName) when is_pid(Pid) and is_binary(ClassName) ->
-    gen_server:call(Pid, {get_instances_for_class, ClassName, self()}, infinity).
+    call(Pid, {get_instances_for_class, ClassName, self()}).
 
-get_bitmaps(Pid) when is_pid(Pid) ->
-    gen_server:call(Pid, get_bitmaps, infinity).
-
-get_instance(Pid, InstanceId) when is_pid(Pid) ->
-    gen_server:call(Pid, {get_instance, InstanceId}, infinity).
+call(Pid, Data) -> gen_server:call(Pid, Data, infinity).
 
 %% Callbacks
 
@@ -108,35 +108,19 @@ init([{binary, Binary}]) ->
 
 handle_call(close, _From, State) ->
     {stop, normal, ok, State};
-handle_call(get_primitive_arrays, _From, State) ->
-    {reply, ets:tab2list(State#state.ets_primitive_array), State};
 handle_call({get_primitive_array, ObjectId}, _From, State) ->
     {reply, ets_get(State#state.ets_primitive_array, ObjectId), State};
 handle_call({get_string, StringId}, _From, State) ->
-    Result = case ets:lookup(State#state.ets_strings, StringId) of
-        [] -> not_found;
-        [#hprof_record_string{data=S}|_] -> S
-    end,
-    {reply, Result, State};
-handle_call({get_class, ClassId}, _From, State) ->
-    Result = case ets:lookup(State#state.ets_class_dump, ClassId) of
-        [] -> not_found;
-        [S|_] -> S
-    end,
-    {reply, Result, State};
-handle_call({get_instances_for_class, ClassName, Caller}, _From, State) ->
-    Ref = make_ref(),
-    gen_server:cast(self(), {get_instances_for_class, ClassName, Caller, Ref}),
+    {reply, ets_get(State#state.ets_strings, StringId), State};
+handle_call({get_all_instances, Caller}, _From, State) ->
+    {ok, Ref} = stream_instances(State, Caller),
     {reply, {ok, Ref}, State};
-handle_call(get_bitmaps, _From, State) ->
-    Result = get_bitmaps_impl(State),
-    {reply, Result, State};
+handle_call({get_instances_for_class, ClassName, Caller}, _From, State) ->
+    {ok, Ref} = stream_instances(State, Caller, ClassName),
+    {reply, {ok, Ref}, State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
-handle_cast({get_instances_for_class, ClassName, Caller, Ref}, State) ->
-    get_instances_for_class_impl(State, ClassName, Caller, Ref),
-    {noreply, State};
 handle_cast({parse_file, Filename}, State) ->
     State1 = parse_file_impl(State, Filename),
     {noreply, State1};
@@ -156,6 +140,38 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% Implementation
+
+stream_instances(State, Caller) ->
+    stream_instances_filter(State, Caller, fun(_) -> true end).
+
+stream_instances(State, Caller, ClassName) when is_binary(ClassName) ->
+    % Get the string ID for the class name
+    case get_id_for_string(State, ClassName) of
+        not_found -> {error, class_name_not_found};
+        StringId ->
+            case get_class_obj_by_name_id(State, StringId) of
+                not_found -> {error, class_obj_not_found};
+                ClassObj ->
+                    AcceptFun = fun(#hprof_heap_instance{class_object_id=Id}) ->
+                        Id =:= ClassObj#hprof_class_dump.class_object
+                    end,
+                    stream_instances_filter(State, Caller, AcceptFun)
+            end
+    end.
+
+stream_instances_filter(State, Caller, AcceptFun) when is_function(AcceptFun) ->
+    % Create a reference to identify this request
+    Ref = make_ref(),
+
+    % Spawn a worker to iterate over the hprof data and pull out the relevant
+    % instance data
+    spawn_link(hprof_instance_parser, parse_instances, [
+        self(), Caller, Ref, AcceptFun,
+        State#state.hprof_data, State#state.ets_class_dump
+    ]),
+
+    % Return the request ref
+    {ok, Ref}.
 
 parse_file_impl(State, Filename) ->
     {ok, Bin} = file:read_file(Filename),
@@ -194,263 +210,11 @@ init_ets(State) ->
         ets_roots_jni_monitor = ets:new(roots_jni_monitor, [set, {keypos, 2}])
     }.
 
-get_bitmaps_impl(State) ->
-    ok.
-%     case get_instances_for_class_impl(State, <<"android.graphics.Bitmap">>) of
-%         {error, Reason} -> {error, Reason};
-%         {ok, Instances} ->
-%             % Get the string IDs for the properties we care about
-%             MWidth = get_id_for_string(State, <<"mWidth">>),
-%             MHeight = get_id_for_string(State, <<"mHeight">>),
-%             MBuffer = get_id_for_string(State, <<"mBuffer">>),
-%             % If any of those strings don't exist, something is wrong
-%             case lists:any(fun(X) -> X =:= not_found end, [MWidth, MHeight, MBuffer]) of
-%                 true ->
-%                     {error, string_table_incomplete};
-%                 false ->
-%                     Bitmaps = [{bitmap,
-%                       maps:get(MWidth, Values),
-%                       maps:get(MHeight, Values),
-%                       maps:get(MBuffer, Values)} ||
-%                       #hprof_heap_instance{instance_values=Values}
-%                       <- Instances
-%                     ],
-%                     [Bmp || Bmp={bitmap, W, H, B} <- Bitmaps,
-%                      W =/= not_found,
-%                      H =/= not_found,
-%                      B =/= not_found]
-%             end
-%     end.
-
 get_id_for_string(State, String) when is_binary(String) ->
     case ets:lookup(State#state.ets_strings_reverse, String) of
         [] -> not_found;
         [{_, Id}] -> Id
     end.
-
-get_instances_for_class_impl(State, ClassName, Caller, Ref) ->
-    % Get the string ID for the class name
-    Result = case get_id_for_string(State, ClassName) of
-        not_found -> {hprof_parser, Ref, {error, class_name_not_found}};
-        StringId ->
-            case get_class_obj_by_name_id(State, StringId) of
-                not_found -> {hprof_parser, Ref, {error, class_obj_not_found}};
-                ClassObj ->
-                    get_instances_for_class_obj(State, ClassObj, Caller, Ref),
-                    {hprof_parser, Ref, ok}
-            end
-    end,
-    Caller ! Result.
-
-get_instances_for_class_obj(State, ClassObj, Caller, Ref) ->
-    <<?HPROF_HEADER_MAGIC,
-      _HeapRefSize:?UINT32,
-      _DumpTimeMs:?UINT64,
-      Rest/binary >> = State#state.hprof_data,
-    get_instances_for_class_obj_records(State, ClassObj, Caller, Ref, Rest).
-
-get_instances_for_class_obj_records(_State, _ClassObj, _Caller, _Ref, <<>>) ->
-    ok;
-get_instances_for_class_obj_records(State, ClassObj, Caller, Ref, <<Binary/binary>>) ->
-    <<RecordType:?UINT8,
-      _Microseconds:?UINT32,
-      RecordSize:?UINT32,
-      Rest/binary>> = Binary,
-    get_instances_for_class_obj_record(State, ClassObj, Caller, Ref, Rest, RecordSize, RecordType).
-
-get_instances_for_class_obj_record(State, ClassObj, Caller, Ref, <<Binary/binary>>, RecordSize, ?HPROF_TAG_HEAP_DUMP_SEGMENT) ->
-    get_instances_for_class_obj_heap_seg(State, ClassObj, Caller, Ref, Binary, RecordSize);
-get_instances_for_class_obj_record(State, ClassObj, Caller, Ref, <<Binary/binary>>, RecordSize, _RecordType) ->
-    <<_Record:RecordSize/binary, Rest/binary>> = Binary,
-    get_instances_for_class_obj_records(State, ClassObj, Caller, Ref, Rest).
-
-get_instances_for_class_obj_heap_seg(State, ClassObj, Caller, Ref, <<Binary/binary>>, 0) ->
-    get_instances_for_class_obj_records(State, ClassObj, Caller, Ref, Binary);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_UNKNOWN, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_JNI_GLOBAL, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _JniGlobalRefId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + (RefSize * 2),
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_JNI_LOCAL, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _ThreadSerial:?UINT32,
-      _FrameNum:?UINT32,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize + 8,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_JAVA_FRAME, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _ThreadSerial:?UINT32,
-      _FrameNum:?UINT32,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize + 8,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_NATIVE_STACK, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _ThreadSerial:?UINT32,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize + 4,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_STICKY_CLASS, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_THREAD_BLOCK, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _ThreadSerial:?UINT32,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize + 4,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_MONITOR_USED, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _ThreadSerial:?UINT32,
-      _StackTraceSerial:?UINT32,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize + 8,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_CLASS_DUMP, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ClassObjId:RefSize/big-unsigned-integer-unit:8,
-      _StackTraceSerial:?UINT32,
-      _SuperClassObjId:RefSize/big-unsigned-integer-unit:8,
-      _ClassLoaderObjId:RefSize/big-unsigned-integer-unit:8,
-      _Signer:RefSize/big-unsigned-integer-unit:8,
-      _ProtDomain:RefSize/big-unsigned-integer-unit:8,
-      _Reserved1:RefSize/big-unsigned-integer-unit:8,
-      _Reserved2:RefSize/big-unsigned-integer-unit:8,
-      _InstanceSize:?UINT32,
-      NumConstants:?UINT16,
-      Rest1/binary>> = Bin,
-    HeaderBytesRead = RefSize + 4 + RefSize * 6 + 4 + 2 + 1,
-
-    % Constants
-    {ConstantBytes, Rest2} = skip_constants(State, Rest1, NumConstants),
-
-    % Statics
-    <<NumStatics:?UINT16, Rest3/binary>> = Rest2,
-    {StaticBytes, Rest4} = skip_statics(State, Rest3, NumStatics),
-
-    % Instance vars
-    <<NumInstances:?UINT16, Rest5/binary>> = Rest4,
-    {InstanceBytes, Rest6} = skip_instances(State, Rest5, NumInstances),
-
-    BytesLeft = RemainingBytes - (
-        HeaderBytesRead + ConstantBytes + 2 + StaticBytes + 2 + InstanceBytes
-    ),
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest6, BytesLeft);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_INSTANCE_DUMP, Bin/binary>>, RemainingBytes) ->
-    % Can't actually parse these during the first pass, since they come *before*
-    % the class definitions
-    RefSize = State#state.heap_ref_size,
-    <<ObjectId:RefSize/big-unsigned-integer-unit:8,
-      StackTraceSerial:?UINT32,
-      ClassObjectId:RefSize/big-unsigned-integer-unit:8,
-      DataSize:?UINT32,
-      Rest/binary>> = Bin,
-    <<Data:DataSize/binary, Rest1/binary>> = Rest,
-    BytesRead = 1 + RefSize + 4 + RefSize + 4 + DataSize,
-    case ClsObj#hprof_class_dump.class_object =:= ClassObjectId of
-        true ->
-            Instance = parse_instance_record(State, #hprof_heap_instance_raw{
-                object_id=ObjectId,
-                stack_trace_serial=StackTraceSerial,
-                class_object_id=ClassObjectId,
-                data=Data
-            }),
-            Caller ! {hprof_parser, Ref, Instance};
-        false -> ok
-    end,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest1, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _StackTraceSerial:?UINT32,
-      ElementCount:?UINT32,
-      _ElementClassObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    DataSize = ElementCount * RefSize,
-    <<_ArrayData:DataSize/binary, Rest1/binary>> = Rest,
-    BytesRead = 1 + RefSize + 8 + RefSize + DataSize,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest1, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _StackTraceSerial:?UINT32,
-      ElementCount:?UINT32,
-      DataType:?UINT8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize + 9,
-    RefSize = State#state.heap_ref_size,
-    ElementSize = primitive_size(RefSize, DataType),
-    ArraySize = ElementSize * ElementCount,
-    <<_ArrayData:ArraySize/binary, Rest1/binary>> = Rest,
-    get_instances_for_class_obj_heap_seg(
-        State, ClsObj, Caller, Ref, Rest1,
-        RemainingBytes - (BytesRead + ArraySize));
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_HEAP_DUMP_INFO, Bin/binary>>, RemainingBytes) ->
-    % Not currently tracking which heap things are in
-    RefSize = State#state.heap_ref_size,
-    <<_HeapType:?UINT32,
-      _HeapNameStringId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + 4 + RefSize,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_INTERNED_STRING, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(_State, ClsObj, Caller, Ref, <<?HPROF_ROOT_FINALIZING, _/binary>>, _RemainingBytes) ->
-    throw({obsolete_tag, hprof_root_finalizing});
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_DEBUGGER, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(_State, ClsObj, Caller, Ref, <<?HPROF_ROOT_REFERENCE_CLEANUP, _/binary>>, _RemainingBytes) ->
-    throw({obsolete_tag, hprof_root_reference_cleanup});
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_VM_INTERNAL, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, <<?HPROF_ROOT_JNI_MONITOR, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.heap_ref_size,
-    <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
-      _ThreadSerial:?UINT32,
-      _FrameNum:?UINT32,
-      Rest/binary>> = Bin,
-    BytesRead = 1 + RefSize + 8,
-    get_instances_for_class_obj_heap_seg(State, ClsObj, Caller, Ref, Rest, RemainingBytes - BytesRead);
-get_instances_for_class_obj_heap_seg(_State, ClsObj, Caller, Ref, <<?HPROF_UNREACHABLE, _/binary>>, _RemainingBytes) ->
-    throw({obsolete_tag, hprof_root_unreachable});
-get_instances_for_class_obj_heap_seg(_State, ClsObj, Caller, Ref, <<?HPROF_PRIMITIVE_ARRAY_NODATA_DUMP, _/binary>>, _RemainingBytes) ->
-    throw({obsolete_tag, hprof_primitive_array_nodata_dump}).
-
 
 get_class_obj_by_name_id(State, StringId) ->
     % Need to use the class load records to get the class object ID
@@ -465,45 +229,6 @@ get_class_obj_by_name_id(State, StringId) ->
             end
     end.
 
-
-skip_constants(State, <<Binary/binary>>, NumConstants) ->
-    skip_constants(State, Binary, NumConstants, 0).
-skip_constants(_State, <<Binary/binary>>, 0, BytesRead) ->
-    {BytesRead, Binary};
-skip_constants(State, <<Binary/binary>>, NumConstants, BytesRead) ->
-    <<_ConstantPoolIndex:?UINT16,
-      Type:?UINT8,
-      Rest/binary
-    >> = Binary,
-    FieldSize = primitive_size(State#state.heap_ref_size, Type),
-    <<_FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
-    skip_constants(State, Rest1, NumConstants - 1, BytesRead + FieldSize + 3).
-
-skip_statics(State, <<Binary/binary>>, NumStatics) ->
-    skip_statics(State, Binary, NumStatics, 0).
-skip_statics(_State, <<Binary/binary>>, 0, BytesRead) ->
-    {BytesRead, Binary};
-skip_statics(State, <<Binary/binary>>, NumStatics, BytesRead) ->
-    RefSize = State#state.heap_ref_size,
-    <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
-      Type:?UINT8,
-      Rest/binary
-    >> = Binary,
-    FieldSize = primitive_size(RefSize, Type),
-    <<_FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
-    skip_statics(State, Rest1, NumStatics-1, BytesRead + 1 + RefSize + FieldSize).
-
-skip_instances(State, <<Binary/binary>>, NumFields) ->
-    skip_instances(State, Binary, NumFields, 0).
-skip_instances(_State, <<Binary/binary>>, 0, BytesRead) ->
-    {BytesRead, Binary};
-skip_instances(State, <<Binary/binary>>, NumFields, BytesRead) ->
-    RefSize = State#state.heap_ref_size,
-    <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
-      _Type:?UINT8,
-      Rest/binary
-    >> = Binary,
-    skip_instances(State, Rest, NumFields - 1, BytesRead + RefSize + 1).
 
 parse_binary(State, Bin) ->
     parse_header(State#state{hprof_data=Bin}, Bin).
@@ -522,63 +247,6 @@ parse_header(State, Bindata) ->
         dump_timestamp_ms = DumpTimeMs
     },
     parse_records_optimized(State1, Rest).
-
-parse_instance_record(State, R=#hprof_heap_instance_raw{}) ->
-    % Break out the record data
-    #hprof_heap_instance_raw{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        class_object_id=ClassObjectId,
-        data=Data
-    } = R,
-
-    % Parse the class data
-    Values = parse_instance_record_for_class(
-        State, Data, ClassObjectId, #{}
-    ),
-    #hprof_heap_instance{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        class_object_id=ClassObjectId,
-        instance_values=Values
-    }.
-
-% Class ID of 0 is 'Object'
-parse_instance_record_for_class(_State, <<_Binary/binary>>, 0, Acc) ->
-    Acc;
-parse_instance_record_for_class(State, <<Binary/binary>>, ClassId, Acc) ->
-    % Get the class instance for this object
-    ClassObj = hd(ets:lookup(State#state.ets_class_dump, ClassId)),
-
-    % Get the list of instance fields to read data for, and extract them
-    ClassInstanceFields = ClassObj#hprof_class_dump.instance_fields,
-    SuperClassId = ClassObj#hprof_class_dump.superclass_object,
-    extract_instance_id_fields(
-        State, Binary, SuperClassId, ClassInstanceFields, Acc
-    ).
-
-extract_instance_id_fields(State, <<Binary/binary>>, SuperClassId, [], Acc) ->
-    parse_instance_record_for_class(
-        State, Binary, SuperClassId, Acc
-    );
-extract_instance_id_fields(State, <<Binary/binary>>, SuperClassId, [Field|Fields], Acc) ->
-    #hprof_instance_field{name_string_id=Name, type=Type} = Field,
-    RefSize = State#state.heap_ref_size,
-    DataSize = primitive_size(RefSize, Type),
-    extract_instance_id_field(
-        State, Binary, SuperClassId, Fields, Acc, Name, Type, DataSize
-    ).
-
-extract_instance_id_field(State, <<Binary/binary>>, SuperClassId, Fields, Acc, Name, Type, DataSize) ->
-    <<PrimitiveBin:DataSize/binary, Rest/binary>> = Binary,
-    Value = #hprof_instance_field{
-        name_string_id=Name,
-        type=Type,
-        value=parse_primitive(PrimitiveBin, Type)
-    },
-    extract_instance_id_fields(
-        State, Rest, SuperClassId, Fields, maps:put(Name, Value, Acc)
-    ).
 
 parse_records_optimized(State, <<>>) ->
     State;
@@ -630,7 +298,7 @@ parse_record_optimized(State, _Size, <<Binary/binary>>, ?HPROF_TAG_LOAD_CLASS) -
     ets:insert(State#state.ets_class_load, Record),
     parse_records_optimized(State, Rest);
 parse_record_optimized(State, _Size, <<Binary/binary>>, ?HPROF_TAG_UNLOAD_CLASS) ->
-    % Loading a class
+    % Unloading a class
     % We don't really care about these records
     % u32: Serial number
     <<_Serial:?UINT32,
@@ -847,12 +515,6 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_INSTANCE_DUMP, Bin/binary>>, 
       Rest/binary>> = Bin,
     <<_Data:DataSize/binary, Rest1/binary>> = Rest,
     BytesRead = 1 + RefSize + 4 + RefSize + 4 + DataSize,
-    % Instance = #hprof_heap_instance_raw{
-    %     object_id=ObjectId,
-    %     stack_trace_serial=StackTraceSerial,
-    %     class_object_id=ClassObjectId,
-    %     data=Data
-    % },
     parse_heap_dump_segments_optimized(State, Rest1, RemainingBytes - BytesRead);
 parse_heap_dump_segments_optimized(State, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
     RefSize = State#state.heap_ref_size,
