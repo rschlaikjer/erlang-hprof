@@ -62,9 +62,9 @@ encode_pixel_data(?BITMAP_MODE_ARGB_8888, Width, Data) ->
     ],
     Compressed = zlib:deflate(Zlib, Rows, finish),
     ok = zlib:deflateEnd(Zlib),
-    ok =zlib:close(Zlib),
+    ok = zlib:close(Zlib),
     << <<X/binary>> || X <- [
-        crc_chunk(?PNG_DATA_SEGMENT, S) || S <- Compressed
+        crc_chunk(?PNG_DATA_SEGMENT, S) || S <- lists:flatten(Compressed)
     ]>>.
 
 rgb_565_to_888(<<R:5, G:6, B:5>>) ->
