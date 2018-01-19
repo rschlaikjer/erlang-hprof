@@ -111,7 +111,11 @@ handle_call(close, _From, State) ->
 handle_call({get_primitive_array, ObjectId}, _From, State) ->
     {reply, ets_get(State#state.ets_primitive_array, ObjectId), State};
 handle_call({get_string, StringId}, _From, State) ->
-    {reply, ets_get(State#state.ets_strings, StringId), State};
+    Return = case ets_get(State#state.ets_strings, StringId) of
+        #hprof_record_string{data=V} -> V;
+        _ -> not_found
+    end,
+    {reply, Return, State};
 handle_call({get_all_instances, Caller}, _From, State) ->
     {ok, Ref} = stream_instances(State, Caller),
     {reply, {ok, Ref}, State};
@@ -786,7 +790,7 @@ parse_class_dump_instance_fields(State, <<Binary/binary>>, NumFields, Acc, Class
     >> = Binary,
     Field = #hprof_instance_field{
         name_string_id=FieldNameStringId,
-        type=Type
+        type=hprof:primitive_name(Type)
     },
     parse_class_dump_instance_fields(
         State, Rest, NumFields-1, [Field|Acc],

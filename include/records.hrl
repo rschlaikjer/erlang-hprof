@@ -220,7 +220,8 @@
 
 -record(hprof_instance_field, {
     name_string_id :: pos_integer(),
-    type :: pos_integer(),
+    name :: binary(),
+    type :: atom(),
     value :: any()
 }).
 
@@ -237,14 +238,15 @@
     num_static_fields :: pos_integer(),
     static_fields :: list(#hprof_static_field{}),
     num_instance_fields :: pos_integer(),
-    instance_fields :: list(#hprof_instance_field{})
+    instance_fields :: maps:map(#hprof_instance_field{})
 }).
 
 -record(hprof_heap_instance, {
     object_id :: pos_integer(),
+    class_name :: binary(),
     stack_trace_serial :: pos_integer(),
     class_object_id :: pos_integer(),
-    instance_values :: list(#hprof_instance_field{})
+    instance_values :: maps:map(#hprof_instance_field{})
 }).
 
 -record(hprof_root, {
