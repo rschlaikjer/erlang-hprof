@@ -74,24 +74,31 @@
 
 %% Public API
 
+-spec parse_file(string()) -> {ok, pid()}.
 parse_file(Filename) ->
     gen_server:start_link(?MODULE, [{file, Filename}], []).
 
+-spec parse_binary(binary()) -> {ok, pid()}.
 parse_binary(Binary) when is_binary(Binary) ->
     gen_server:start_link(?MODULE, [{binary, Binary}], []).
 
+-spec close(pid()) -> ok.
 close(Pid) when is_pid(Pid) ->
     call(Pid, close).
 
+-spec get_primitive_array(pid(), pos_integer()) -> #hprof_primitive_array{} | not_found.
 get_primitive_array(Pid, ObjectId) when is_pid(Pid) ->
     call(Pid, {get_primitive_array, ObjectId}).
 
+-spec get_string(pid(), pos_integer()) -> binary() | not_found.
 get_string(Pid, StringId) when is_pid(Pid) ->
     call(Pid, {get_string, StringId}).
 
+-spec get_all_instances(pid()) -> {ok, reference()}.
 get_all_instances(Pid) when is_pid(Pid) ->
     call(Pid, {get_all_instances, self()}).
 
+-spec get_instances_for_class(pid(), binary()) -> {ok, reference()} | {error, any()}.
 get_instances_for_class(Pid, ClassName) when is_pid(Pid) and is_binary(ClassName) ->
     call(Pid, {get_instances_for_class, ClassName, self()}).
 
