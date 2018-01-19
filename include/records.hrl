@@ -226,7 +226,7 @@
 }).
 
 -record(hprof_class_dump, {
-    class_object :: pos_integer(),
+    class_id :: pos_integer(),
     stack_trace_serial :: pos_integer(),
     superclass_object :: pos_integer(),
     classloader_object :: pos_integer(),

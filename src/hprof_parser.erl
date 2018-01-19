@@ -117,11 +117,9 @@ handle_call({get_string, StringId}, _From, State) ->
     end,
     {reply, Return, State};
 handle_call({get_all_instances, Caller}, _From, State) ->
-    {ok, Ref} = stream_instances(State, Caller),
-    {reply, {ok, Ref}, State};
+    {reply, stream_instances(State, Caller), State};
 handle_call({get_instances_for_class, ClassName, Caller}, _From, State) ->
-    {ok, Ref} = stream_instances(State, Caller, ClassName),
-    {reply, {ok, Ref}, State};
+    {reply, stream_instances(State, Caller, ClassName), State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
@@ -146,7 +144,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% Implementation
 
 stream_instances(State, Caller) ->
-    stream_instances_filter(State, Caller, fun(_) -> true end).
+    stream_instances_filter(State, Caller, fun(_ObjId, _ClassId) -> true end).
 
 stream_instances(State, Caller, ClassName) when is_binary(ClassName) ->
     % Get the string ID for the class name
@@ -156,8 +154,8 @@ stream_instances(State, Caller, ClassName) when is_binary(ClassName) ->
             case get_class_obj_by_name_id(State, StringId) of
                 not_found -> {error, class_obj_not_found};
                 ClassObj ->
-                    AcceptFun = fun(#hprof_heap_instance{class_object_id=Id}) ->
-                        Id =:= ClassObj#hprof_class_dump.class_object
+                    AcceptFun = fun(_ObjectId, ClassId) ->
+                        ClassId =:= ClassObj#hprof_class_dump.class_id
                     end,
                     stream_instances_filter(State, Caller, AcceptFun)
             end
@@ -666,7 +664,7 @@ parse_class_dump_segment_optimized(State, <<Bin/binary>>, RemainingBytes) ->
 
     % Start building the class
     Class = #hprof_class_dump{
-        class_object=ClassObjId,
+        class_id=ClassObjId,
         stack_trace_serial=StackTraceSerial,
         superclass_object=SuperClassObjId,
         classloader_object=ClassLoaderObjId,

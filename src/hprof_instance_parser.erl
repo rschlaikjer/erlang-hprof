@@ -131,22 +131,20 @@ parse_instances_heap_dump(State, <<?HPROF_INSTANCE_DUMP, Bin/binary>>, Remaining
     <<Data:DataSize/binary, Rest1/binary>> = Rest,
     BytesRead = 1 + RefSize + 4 + RefSize + 4 + DataSize,
 
-    % Parse out the instance data
-    Instance = parse_instance_record(State, #hprof_heap_instance_raw{
-        object_id=ObjectId,
-        stack_trace_serial=StackTraceSerial,
-        class_object_id=ClassObjectId,
-        data=Data
-    }),
-
-    % Check if the instance satisfies our acceptance function
+    % Check if the instance class ID satisfies our acceptance function
     AcceptFun = State#state.accept_fun,
-    case AcceptFun(Instance) of
+    case AcceptFun(ObjectId, ClassObjectId) of
         false ->
             % If it doesn't, ignore it
             ok;
         true ->
-            % If it does, chuck it over to the recipient.
+            % If it does, parse and chuck it over to the recipient.
+            Instance = parse_instance_record(State, #hprof_heap_instance_raw{
+                object_id=ObjectId,
+                stack_trace_serial=StackTraceSerial,
+                class_object_id=ClassObjectId,
+                data=Data
+            }),
             State#state.recipient ! {hprof_parser, State#state.ref, Instance}
     end,
     parse_instances_heap_dump(State, Rest1, RemainingBytes - BytesRead);
@@ -371,9 +369,7 @@ skip_class_dump_segment_optimized_instances(State, <<Bin/binary>>, RemainingByte
     ).
 
 skip_class_dump_instance_fields(State, <<Binary/binary>>, 0, RemainingBytes) ->
-    skip_class_dump_segment_finalize(
-        State, Binary, RemainingBytes
-    );
+    parse_instances_heap_dump(State, Binary, RemainingBytes);
 skip_class_dump_instance_fields(State, <<Binary/binary>>, NumFields, RemainingBytes) ->
     RefSize = State#state.ref_size,
     <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
@@ -383,6 +379,3 @@ skip_class_dump_instance_fields(State, <<Binary/binary>>, NumFields, RemainingBy
     skip_class_dump_instance_fields(
         State, Rest, NumFields-1, RemainingBytes - (RefSize + 1)
     ).
-
-skip_class_dump_segment_finalize(State, <<Bin/binary>>, RemainingBytes) ->
-    parse_instances_heap_dump(State, Bin, RemainingBytes).
