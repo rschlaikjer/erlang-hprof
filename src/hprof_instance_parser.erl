@@ -154,35 +154,7 @@ parse_instances_heap_dump(State, <<?HPROF_ROOT_THREAD_OBJECT, Bin/binary>>, Rema
     BytesRead = 1 + RefSize + 8,
     parse_instances_heap_dump(State, Rest, RemainingBytes - BytesRead);
 parse_instances_heap_dump(State, <<?HPROF_CLASS_DUMP, Bin/binary>>, RemainingBytes) ->
-    RefSize = State#state.ref_size,
-    <<_ClassObjId:RefSize/big-unsigned-integer-unit:8,
-      _StackTraceSerial:?UINT32,
-      _SuperClassObjId:RefSize/big-unsigned-integer-unit:8,
-      _ClassLoaderObjId:RefSize/big-unsigned-integer-unit:8,
-      _Signer:RefSize/big-unsigned-integer-unit:8,
-      _ProtDomain:RefSize/big-unsigned-integer-unit:8,
-      _Reserved1:RefSize/big-unsigned-integer-unit:8,
-      _Reserved2:RefSize/big-unsigned-integer-unit:8,
-      _InstanceSize:?UINT32,
-      NumConstants:?UINT16,
-      Rest1/binary>> = Bin,
-    HeaderBytesRead = RefSize + 4 + RefSize * 6 + 4 + 2 + 1,
-
-    % Constants
-    {ConstantBytes, Rest2} = skip_constants(State, Rest1, NumConstants),
-
-    % Statics
-    <<NumStatics:?UINT16, Rest3/binary>> = Rest2,
-    {StaticBytes, Rest4} = skip_statics(State, Rest3, NumStatics),
-
-    % Instance vars
-    <<NumInstances:?UINT16, Rest5/binary>> = Rest4,
-    {InstanceBytes, Rest6} = skip_instances(State, Rest5, NumInstances),
-
-    BytesLeft = RemainingBytes - (
-        HeaderBytesRead + ConstantBytes + 2 + StaticBytes + 2 + InstanceBytes
-    ),
-    parse_instances_heap_dump(State, Rest6, BytesLeft);
+    parse_instances_class_dump(State, Bin, RemainingBytes - 1);
 parse_instances_heap_dump(State, <<?HPROF_OBJECT_ARRAY_DUMP, Bin/binary>>, RemainingBytes) ->
     RefSize = State#state.ref_size,
     <<_ObjectId:RefSize/big-unsigned-integer-unit:8,
@@ -203,10 +175,9 @@ parse_instances_heap_dump(State, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/binary>>, Re
       Rest/binary>> = Bin,
     BytesRead = 1 + RefSize + 9,
     RefSize = State#state.ref_size,
-    ElementSize = primitive_size(RefSize, DataType),
+    ElementSize = hprof:primitive_size(RefSize, DataType),
     ArraySize = ElementSize * ElementCount,
-    <<_ArrayData:ArraySize/binary, Rest1/binary>> = Rest,
-    parse_instances_heap_dump(State, Rest1, RemainingBytes - (BytesRead + ArraySize));
+    parse_instances_heap_skip_array(State, Rest, ArraySize, RemainingBytes - BytesRead);
 parse_instances_heap_dump(State, <<?HPROF_HEAP_DUMP_INFO, Bin/binary>>, RemainingBytes) ->
     % Not currently tracking which heap things are in
     RefSize = State#state.ref_size,
@@ -250,44 +221,10 @@ parse_instances_heap_dump(_State, <<?HPROF_UNREACHABLE, _/binary>>, _RemainingBy
 parse_instances_heap_dump(_State, <<?HPROF_PRIMITIVE_ARRAY_NODATA_DUMP, _/binary>>, _RemainingBytes) ->
     throw({obsolete_tag, hprof_primitive_array_nodata_dump}).
 
-skip_constants(State, <<Binary/binary>>, NumConstants) ->
-    skip_constants(State, Binary, NumConstants, 0).
-skip_constants(_State, <<Binary/binary>>, 0, BytesRead) ->
-    {BytesRead, Binary};
-skip_constants(State, <<Binary/binary>>, NumConstants, BytesRead) ->
-    <<_ConstantPoolIndex:?UINT16,
-      Type:?UINT8,
-      Rest/binary
-    >> = Binary,
-    FieldSize = primitive_size(State#state.ref_size, Type),
-    <<_FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
-    skip_constants(State, Rest1, NumConstants - 1, BytesRead + FieldSize + 3).
-
-skip_statics(State, <<Binary/binary>>, NumStatics) ->
-    skip_statics(State, Binary, NumStatics, 0).
-skip_statics(_State, <<Binary/binary>>, 0, BytesRead) ->
-    {BytesRead, Binary};
-skip_statics(State, <<Binary/binary>>, NumStatics, BytesRead) ->
-    RefSize = State#state.ref_size,
-    <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
-      Type:?UINT8,
-      Rest/binary
-    >> = Binary,
-    FieldSize = primitive_size(RefSize, Type),
-    <<_FieldDataBin:FieldSize/binary, Rest1/binary>> = Rest,
-    skip_statics(State, Rest1, NumStatics-1, BytesRead + 1 + RefSize + FieldSize).
-
-skip_instances(State, <<Binary/binary>>, NumFields) ->
-    skip_instances(State, Binary, NumFields, 0).
-skip_instances(_State, <<Binary/binary>>, 0, BytesRead) ->
-    {BytesRead, Binary};
-skip_instances(State, <<Binary/binary>>, NumFields, BytesRead) ->
-    RefSize = State#state.ref_size,
-    <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
-      _Type:?UINT8,
-      Rest/binary
-    >> = Binary,
-    skip_instances(State, Rest, NumFields - 1, BytesRead + RefSize + 1).
+% Skip over a primitive array
+parse_instances_heap_skip_array(State, <<Bin/binary>>, ArraySize, RemainingBytes) ->
+    <<_ArrayData:ArraySize/binary, Rest/binary>> = Bin,
+    parse_instances_heap_dump(State, Rest, RemainingBytes - ArraySize).
 
 parse_instance_record(State, R=#hprof_heap_instance_raw{}) ->
     % Break out the record data
@@ -330,7 +267,7 @@ extract_instance_id_fields(State, <<Binary/binary>>, SuperClassId, [], Acc) ->
 extract_instance_id_fields(State, <<Binary/binary>>, SuperClassId, [Field|Fields], Acc) ->
     #hprof_instance_field{name_string_id=Name, type=Type} = Field,
     RefSize = State#state.ref_size,
-    DataSize = primitive_size(RefSize, Type),
+    DataSize = hprof:primitive_size(RefSize, Type),
     extract_instance_id_field(
         State, Binary, SuperClassId, Fields, Acc, Name, Type, DataSize
     ).
@@ -340,188 +277,109 @@ extract_instance_id_field(State, <<Binary/binary>>, SuperClassId, Fields, Acc, N
     Value = #hprof_instance_field{
         name_string_id=Name,
         type=Type,
-        value=parse_primitive(PrimitiveBin, Type)
+        value=hprof:parse_primitive(PrimitiveBin, Type)
     },
     extract_instance_id_fields(
         State, Rest, SuperClassId, Fields, maps:put(Name, Value, Acc)
     ).
 
-primitive_size(RefSize, ?HPROF_BASIC_OBJECT) -> RefSize;
-primitive_size(_, ?HPROF_BASIC_BOOLEAN) -> 1;
-primitive_size(_, ?HPROF_BASIC_CHAR) -> 2;
-primitive_size(_, ?HPROF_BASIC_FLOAT) -> 4;
-primitive_size(_, ?HPROF_BASIC_DOUBLE) -> 8;
-primitive_size(_, ?HPROF_BASIC_BYTE) -> 1;
-primitive_size(_, ?HPROF_BASIC_SHORT) -> 2;
-primitive_size(_, ?HPROF_BASIC_INT) -> 4;
-primitive_size(_, ?HPROF_BASIC_LONG) -> 8.
-
-parse_primitive(<<V:?UINT32>>, ?HPROF_BASIC_OBJECT) -> V;
-parse_primitive(<<V:?UINT64>>, ?HPROF_BASIC_OBJECT) -> V;
-parse_primitive(<<V:?UINT8>>, ?HPROF_BASIC_BOOLEAN) -> V;
-parse_primitive(<<AH:1/binary, AL:1/binary>>, ?HPROF_BASIC_CHAR) -> <<AH/binary, AL/binary>>;
-parse_primitive(<<255, 128, 0, 0>>, ?HPROF_BASIC_FLOAT) -> minus_infinity;
-parse_primitive(<<127, 128, 0, 0>>, ?HPROF_BASIC_FLOAT) -> infinity;
-parse_primitive(<<127, 192, 0, 0>>, ?HPROF_BASIC_FLOAT) -> nan;
-parse_primitive(<<V:32/float>>, ?HPROF_BASIC_FLOAT) -> V;
-parse_primitive(<<255,240,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> minus_infinity;
-parse_primitive(<<127,248,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> infinity;
-parse_primitive(<<127,240,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> nan;
-parse_primitive(<<V:64/float>>, ?HPROF_BASIC_DOUBLE) -> V;
-parse_primitive(<<V:?INT8>>, ?HPROF_BASIC_BYTE) -> V;
-parse_primitive(<<V:?INT16>>, ?HPROF_BASIC_SHORT) -> V;
-parse_primitive(<<V:?INT32>>, ?HPROF_BASIC_INT) -> V;
-parse_primitive(<<V:?INT64>>, ?HPROF_BASIC_LONG) -> V.
-
-parse_class_dump_segment_optimized(State, <<Bin/binary>>, RemainingBytes) ->
+parse_instances_class_dump(State, <<Bin/binary>>, RemainingBytes) ->
     RefSize = State#state.ref_size,
-    <<ClassObjId:RefSize/big-unsigned-integer-unit:8,
-      StackTraceSerial:?UINT32,
-      SuperClassObjId:RefSize/big-unsigned-integer-unit:8,
-      ClassLoaderObjId:RefSize/big-unsigned-integer-unit:8,
-      Signer:RefSize/big-unsigned-integer-unit:8,
-      ProtDomain:RefSize/big-unsigned-integer-unit:8,
+    <<_ClassObjId:RefSize/big-unsigned-integer-unit:8,
+      _StackTraceSerial:?UINT32,
+      _SuperClassObjId:RefSize/big-unsigned-integer-unit:8,
+      _ClassLoaderObjId:RefSize/big-unsigned-integer-unit:8,
+      _Signer:RefSize/big-unsigned-integer-unit:8,
+      _ProtDomain:RefSize/big-unsigned-integer-unit:8,
       _Reserved1:RefSize/big-unsigned-integer-unit:8,
       _Reserved2:RefSize/big-unsigned-integer-unit:8,
-      InstanceSize:?UINT32,
+      _InstanceSize:?UINT32,
       NumConstants:?UINT16,
       Rest1/binary>> = Bin,
 
     HeaderBytesRead = RefSize + 4 + RefSize * 6 + 4 + 2,
 
-    % Start building the class
-    Class = #hprof_class_dump{
-        class_object=ClassObjId,
-        stack_trace_serial=StackTraceSerial,
-        superclass_object=SuperClassObjId,
-        classloader_object=ClassLoaderObjId,
-        signer=Signer,
-        prot_domain=ProtDomain,
-        instance_size=InstanceSize,
-        num_constants=NumConstants
-    },
-
     % Empty constant pool for ART, apparently, but may as well be complete
     % about it.
-    parse_class_dump_constants(
-        State, Rest1, Class, RemainingBytes-HeaderBytesRead
+    skip_class_dump_constants(
+        State, Rest1, NumConstants, RemainingBytes-HeaderBytesRead
     ).
 
-parse_class_dump_constants(State, <<Binary/binary>>, Class=#hprof_class_dump{num_constants=NC}, RemainingBytes) ->
-    parse_class_dump_constants(State, Binary, Class, NC, [], RemainingBytes).
-
-parse_class_dump_constants(State, <<Binary/binary>>, Class, 0, Acc, RemainingBytes) ->
-    parse_class_dump_segment_optimized_statics(
-        State, Binary, Class#hprof_class_dump{constants=lists:reverse(Acc)}, RemainingBytes
+skip_class_dump_constants(State, <<Binary/binary>>, 0, RemainingBytes) ->
+    skip_class_dump_segment_optimized_statics(
+        State, Binary, RemainingBytes
     );
-parse_class_dump_constants(State, <<Binary/binary>>, Class, NumConstants, Acc, RemainingBytes) ->
-    <<ConstantPoolIndex:?UINT16,
+skip_class_dump_constants(State, <<Binary/binary>>, NumConstants, RemainingBytes) ->
+    <<_ConstantPoolIndex:?UINT16,
       Type:?UINT8,
       Rest/binary
     >> = Binary,
     RefSize = State#state.ref_size,
-    FieldSize = primitive_size(RefSize, Type),
-    parse_class_dump_constant(
-        State, Rest, Class, NumConstants, Acc,
-        RemainingBytes, ConstantPoolIndex, Type, FieldSize
+    FieldSize = hprof:primitive_size(RefSize, Type),
+    skip_class_dump_constant(
+        State, Rest, NumConstants,
+        RemainingBytes, FieldSize
     ).
 
-parse_class_dump_constant(State, <<Binary/binary>>, Class, NumConstants, Acc,
-                          RemainingBytes, ConstantPoolIndex, Type, FieldSize) ->
-    <<FieldDataBin:FieldSize/binary, Rest/binary>> = Binary,
-    FieldData = parse_primitive(FieldDataBin, Type),
-    Field = #hprof_constant_field{
-        constant_pool_index=ConstantPoolIndex,
-        type=Type,
-        data=FieldData
-    },
-    parse_class_dump_constants(
-        State, Rest, Class, NumConstants-1, [Field|Acc],
+skip_class_dump_constant(State, <<Binary/binary>>, NumConstants,
+                          RemainingBytes, FieldSize) ->
+    <<_FieldDataBin:FieldSize/binary, Rest/binary>> = Binary,
+    skip_class_dump_constants(
+        State, Rest, NumConstants-1,
         RemainingBytes - (2 + 1 + FieldSize)
     ).
 
-parse_class_dump_segment_optimized_statics(State, <<Bin/binary>>, Class, RemainingBytes) ->
+skip_class_dump_segment_optimized_statics(State, <<Bin/binary>>, RemainingBytes) ->
     %     static_fields=Statics,
     %     num_instance_fields=NumInstances,
     %     instance_fields=Instances
     % Static fields
     <<NumStatics:?UINT16, Rest/binary>> = Bin,
-    parse_class_dump_static_fields(
-        State, Rest, Class#hprof_class_dump{
-            num_static_fields=NumStatics
-        }, RemainingBytes - 2
+    skip_class_dump_static_fields(
+        State, Rest, NumStatics, RemainingBytes - 2
     ).
 
-parse_class_dump_static_fields(State, <<Binary/binary>>, Class=#hprof_class_dump{num_static_fields=NS}, RemainingBytes) ->
-    parse_class_dump_static_fields(State, Binary, NS, [], Class, RemainingBytes).
-parse_class_dump_static_fields(State, <<Binary/binary>>, 0, Acc, Class, RemainingBytes) ->
-    parse_class_dump_segment_optimized_instances(
-        State, Binary,
-        Class#hprof_class_dump{static_fields=lists:reverse(Acc)},
-        RemainingBytes
+skip_class_dump_static_fields(State, <<Binary/binary>>, 0, RemainingBytes) ->
+    skip_class_dump_segment_optimized_instances(
+        State, Binary, RemainingBytes
     );
-parse_class_dump_static_fields(State, <<Binary/binary>>, NumStatics, Acc, Class, RemainingBytes) ->
+skip_class_dump_static_fields(State, <<Binary/binary>>, NumStatics, RemainingBytes) ->
     RefSize = State#state.ref_size,
-    <<FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
+    <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
       Type:?UINT8,
       Rest/binary
     >> = Binary,
-    FieldSize = primitive_size(RefSize, Type),
-    parse_class_dump_static(
-        State, Rest, NumStatics, Acc, Class, RemainingBytes - (RefSize + 1),
-        FieldNameStringId, Type, FieldSize
+    FieldSize = hprof:primitive_size(RefSize, Type),
+    skip_class_dump_static(
+        State, Rest, NumStatics, RemainingBytes - (RefSize + 1), FieldSize
     ).
 
-parse_class_dump_static(State, <<Binary/binary>>, NumStatics, Acc, Class, RemainingBytes, FieldNameStringId, Type, FieldSize) ->
-    <<FieldDataBin:FieldSize/binary, Rest/binary>> = Binary,
-    FieldData = parse_primitive(FieldDataBin, Type),
-    Field = #hprof_static_field{
-        name_string_id=FieldNameStringId,
-        type=Type,
-        data=FieldData
-    },
-    parse_class_dump_static_fields(
-        State, Rest, NumStatics-1, [Field|Acc], Class,
-        RemainingBytes - FieldSize
+skip_class_dump_static(State, <<Binary/binary>>, NumStatics, RemainingBytes, FieldSize) ->
+    <<_FieldDataBin:FieldSize/binary, Rest/binary>> = Binary,
+    skip_class_dump_static_fields(
+        State, Rest, NumStatics-1, RemainingBytes - FieldSize
     ).
 
-parse_class_dump_segment_optimized_instances(State, <<Bin/binary>>, Class, RemainingBytes) ->
+skip_class_dump_segment_optimized_instances(State, <<Bin/binary>>, RemainingBytes) ->
     % Instance Fields
     <<NumInstances:?UINT16, Rest/binary>> = Bin,
-    parse_class_dump_instance_fields(
-        State, Rest, Class#hprof_class_dump{
-            num_instance_fields=NumInstances
-        }, RemainingBytes - 2
+    skip_class_dump_instance_fields(
+        State, Rest, NumInstances, RemainingBytes - 2
     ).
 
-parse_class_dump_instance_fields(State, <<Binary/binary>>,
-                                 Class=#hprof_class_dump{num_instance_fields=N},
-                                 RemainingBytes) ->
-    parse_class_dump_instance_fields(
-        State, Binary, N, [], Class, RemainingBytes
-    ).
-
-parse_class_dump_instance_fields(State, <<Binary/binary>>, 0, Acc, Class, RemainingBytes) ->
-    parse_class_dump_segment_finalize(
-        State, Binary, Class#hprof_class_dump{
-            instance_fields=lists:reverse(Acc)
-        }, RemainingBytes
+skip_class_dump_instance_fields(State, <<Binary/binary>>, 0, RemainingBytes) ->
+    skip_class_dump_segment_finalize(
+        State, Binary, RemainingBytes
     );
-parse_class_dump_instance_fields(State, <<Binary/binary>>, NumFields, Acc, Class, RemainingBytes) ->
+skip_class_dump_instance_fields(State, <<Binary/binary>>, NumFields, RemainingBytes) ->
     RefSize = State#state.ref_size,
-    <<FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
-      Type:?UINT8,
+    <<_FieldNameStringId:RefSize/big-unsigned-integer-unit:8,
+      _Type:?UINT8,
       Rest/binary
     >> = Binary,
-    Field = #hprof_instance_field{
-        name_string_id=FieldNameStringId,
-        type=Type
-    },
-    parse_class_dump_instance_fields(
-        State, Rest, NumFields-1, [Field|Acc],
-        Class, RemainingBytes - (RefSize + 1)
+    skip_class_dump_instance_fields(
+        State, Rest, NumFields-1, RemainingBytes - (RefSize + 1)
     ).
 
-parse_class_dump_segment_finalize(State, <<Bin/binary>>, Class, RemainingBytes) ->
-    ets:insert(State#state.ets_class_dump, Class),
+skip_class_dump_segment_finalize(State, <<Bin/binary>>, RemainingBytes) ->
     parse_instances_heap_dump(State, Bin, RemainingBytes).

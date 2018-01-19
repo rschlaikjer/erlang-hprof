@@ -547,7 +547,7 @@ parse_heap_dump_segments_optimized(State, <<?HPROF_PRIMITIVE_ARRAY_DUMP, Bin/bin
       Rest/binary>> = Bin,
     BytesRead = 1 + RefSize + 9,
     RefSize = State#state.heap_ref_size,
-    ElementSize = primitive_size(RefSize, DataType),
+    ElementSize = hprof:primitive_size(RefSize, DataType),
     parse_primitive_array_dump(
         State, DataType, ElementCount, ElementSize, ObjectId,
         StackTraceSerial, Rest, RemainingBytes - BytesRead);
@@ -632,7 +632,7 @@ parse_primitive_array_dump(State, DataType, ElementCount, ElementSize, ObjectId,
     DataSize = ElementCount * ElementSize,
     <<ArrayData:DataSize/binary, Rest1/binary>> = Binary,
     Elements = [
-        parse_primitive(Elem, DataType) || <<Elem:ElementSize/binary>>
+        hprof:parse_primitive(Elem, DataType) || <<Elem:ElementSize/binary>>
         <= ArrayData
     ],
     Array = #hprof_primitive_array{
@@ -643,33 +643,6 @@ parse_primitive_array_dump(State, DataType, ElementCount, ElementSize, ObjectId,
     },
     ets:insert(State#state.ets_primitive_array, Array),
     parse_heap_dump_segments_optimized(State, Rest1, RemainingBytes - DataSize).
-
-primitive_size(RefSize, ?HPROF_BASIC_OBJECT) -> RefSize;
-primitive_size(_, ?HPROF_BASIC_BOOLEAN) -> 1;
-primitive_size(_, ?HPROF_BASIC_CHAR) -> 2;
-primitive_size(_, ?HPROF_BASIC_FLOAT) -> 4;
-primitive_size(_, ?HPROF_BASIC_DOUBLE) -> 8;
-primitive_size(_, ?HPROF_BASIC_BYTE) -> 1;
-primitive_size(_, ?HPROF_BASIC_SHORT) -> 2;
-primitive_size(_, ?HPROF_BASIC_INT) -> 4;
-primitive_size(_, ?HPROF_BASIC_LONG) -> 8.
-
-parse_primitive(<<V:?UINT32>>, ?HPROF_BASIC_OBJECT) -> V;
-parse_primitive(<<V:?UINT64>>, ?HPROF_BASIC_OBJECT) -> V;
-parse_primitive(<<V:?UINT8>>, ?HPROF_BASIC_BOOLEAN) -> V;
-parse_primitive(<<AH:1/binary, AL:1/binary>>, ?HPROF_BASIC_CHAR) -> <<AH/binary, AL/binary>>;
-parse_primitive(<<255, 128, 0, 0>>, ?HPROF_BASIC_FLOAT) -> minus_infinity;
-parse_primitive(<<127, 128, 0, 0>>, ?HPROF_BASIC_FLOAT) -> infinity;
-parse_primitive(<<127, 192, 0, 0>>, ?HPROF_BASIC_FLOAT) -> nan;
-parse_primitive(<<V:32/float>>, ?HPROF_BASIC_FLOAT) -> V;
-parse_primitive(<<255,240,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> minus_infinity;
-parse_primitive(<<127,248,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> infinity;
-parse_primitive(<<127,240,0,0,0,0,0,0>>, ?HPROF_BASIC_DOUBLE) -> nan;
-parse_primitive(<<V:64/float>>, ?HPROF_BASIC_DOUBLE) -> V;
-parse_primitive(<<V:?INT8>>, ?HPROF_BASIC_BYTE) -> V;
-parse_primitive(<<V:?INT16>>, ?HPROF_BASIC_SHORT) -> V;
-parse_primitive(<<V:?INT32>>, ?HPROF_BASIC_INT) -> V;
-parse_primitive(<<V:?INT64>>, ?HPROF_BASIC_LONG) -> V.
 
 parse_class_dump_segment_optimized(State, <<Bin/binary>>, RemainingBytes) ->
     RefSize = State#state.heap_ref_size,
@@ -718,7 +691,7 @@ parse_class_dump_constants(State, <<Binary/binary>>, Class, NumConstants, Acc, R
       Rest/binary
     >> = Binary,
     RefSize = State#state.heap_ref_size,
-    FieldSize = primitive_size(RefSize, Type),
+    FieldSize = hprof:primitive_size(RefSize, Type),
     parse_class_dump_constant(
         State, Rest, Class, NumConstants, Acc,
         RemainingBytes, ConstantPoolIndex, Type, FieldSize
@@ -727,7 +700,7 @@ parse_class_dump_constants(State, <<Binary/binary>>, Class, NumConstants, Acc, R
 parse_class_dump_constant(State, <<Binary/binary>>, Class, NumConstants, Acc,
                           RemainingBytes, ConstantPoolIndex, Type, FieldSize) ->
     <<FieldDataBin:FieldSize/binary, Rest/binary>> = Binary,
-    FieldData = parse_primitive(FieldDataBin, Type),
+    FieldData = hprof:parse_primitive(FieldDataBin, Type),
     Field = #hprof_constant_field{
         constant_pool_index=ConstantPoolIndex,
         type=Type,
@@ -764,7 +737,7 @@ parse_class_dump_static_fields(State, <<Binary/binary>>, NumStatics, Acc, Class,
       Type:?UINT8,
       Rest/binary
     >> = Binary,
-    FieldSize = primitive_size(RefSize, Type),
+    FieldSize = hprof:primitive_size(RefSize, Type),
     parse_class_dump_static(
         State, Rest, NumStatics, Acc, Class, RemainingBytes - (RefSize + 1),
         FieldNameStringId, Type, FieldSize
@@ -772,7 +745,7 @@ parse_class_dump_static_fields(State, <<Binary/binary>>, NumStatics, Acc, Class,
 
 parse_class_dump_static(State, <<Binary/binary>>, NumStatics, Acc, Class, RemainingBytes, FieldNameStringId, Type, FieldSize) ->
     <<FieldDataBin:FieldSize/binary, Rest/binary>> = Binary,
-    FieldData = parse_primitive(FieldDataBin, Type),
+    FieldData = hprof:parse_primitive(FieldDataBin, Type),
     Field = #hprof_static_field{
         name_string_id=FieldNameStringId,
         type=Type,
