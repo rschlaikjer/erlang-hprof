@@ -3,6 +3,7 @@
 
 -export([
     await_instances/2,
+    await_instances_acc/3,
     primitive_size/2,
     parse_primitive/2,
     primitive_name/1,
@@ -23,6 +24,20 @@ await_instances(Ref, Fun) ->
         {hprof_parser, Ref, I=#hprof_heap_instance{}} ->
             Fun(I),
             await_instances(Ref, Fun)
+    end.
+
+% Like await_instances, but acts more like fold. An initial state can be passed,
+% and will be passed as argument one to the lambda. The result of the lambda will
+% then be the initial state for the next call, etc.
+-spec await_instances_acc(reference(), any(), function()) -> {ok, any()} | {error, any()}.
+await_instances_acc(Ref, Initial, Fun) ->
+    receive
+        {hprof_parser, Ref, {error, Reason}} ->
+            {error, Reason};
+        {hprof_parser, Ref, ok} ->
+            {ok, Initial};
+        {hprof_parser, Ref, I=#hprof_heap_instance{}} ->
+            await_instances_acc(Ref, Fun(Initial, I), Fun)
     end.
 
 % Get the size in bytes of a primitive type.
