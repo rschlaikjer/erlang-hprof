@@ -31,8 +31,7 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
                 Parser, Buffer#hprof_instance_field.value
             ) of
                 not_found -> {error, missing_primitive_array};
-                #hprof_primitive_array{elements=E} ->
-                    Bytes = << <<X>> || X <- E>>,
+                #hprof_primitive_array{elements=Bytes} ->
                     make_png(
                         ?BITMAP_MODE_ARGB_8888,
                         Width#hprof_instance_field.value,

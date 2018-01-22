@@ -669,10 +669,13 @@ parse_heap_dump_segments_optimized(_State, <<?HPROF_PRIMITIVE_ARRAY_NODATA_DUMP,
 parse_primitive_array_dump(State, DataType, ElementCount, ElementSize, ObjectId, StackTraceSerial, <<Binary/binary>>, RemainingBytes) ->
     DataSize = ElementCount * ElementSize,
     <<ArrayData:DataSize/binary, Rest1/binary>> = Binary,
-    Elements = [
-        hprof:parse_primitive(Elem, DataType) || <<Elem:ElementSize/binary>>
-        <= ArrayData
-    ],
+    Elements = case DataType of
+        ?HPROF_BASIC_BYTE -> ArrayData;
+        ?HPROF_BASIC_CHAR -> ArrayData;
+        _ ->
+            [hprof:parse_primitive(Elem, DataType) || <<Elem:ElementSize/binary>>
+             <= ArrayData]
+    end,
     Array = #hprof_primitive_array{
         object_id=ObjectId,
         stack_trace_serial=StackTraceSerial,
