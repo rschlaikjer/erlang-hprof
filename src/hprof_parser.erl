@@ -15,6 +15,8 @@
     get_all_instances/1,
     % Fetch instances matching a specific class name. Streamed.
     get_instances_for_class/2,
+    % Fetch all primitive arrays of a given type
+    get_primitive_arrays_of_type/2,
     % Fetch a primitive array, by ID
     get_primitive_array/2
 ]).
@@ -90,6 +92,10 @@ close(Pid) when is_pid(Pid) ->
 get_primitive_array(Pid, ObjectId) when is_pid(Pid) ->
     call(Pid, {get_primitive_array, ObjectId}).
 
+-spec get_primitive_arrays_of_type(pid(), atom()) -> list(#hprof_primitive_array{}).
+get_primitive_arrays_of_type(Pid, Type) when is_pid(Pid) ->
+    call(Pid, {get_primitive_arrays_for_type, Type}).
+
 -spec get_string(pid(), pos_integer()) -> binary() | not_found.
 get_string(Pid, StringId) when is_pid(Pid) ->
     call(Pid, {get_string, StringId}).
@@ -117,6 +123,8 @@ handle_call(close, _From, State) ->
     {stop, normal, ok, State};
 handle_call({get_primitive_array, ObjectId}, _From, State) ->
     {reply, ets_get(State#state.ets_primitive_array, ObjectId), State};
+handle_call({get_primitive_arrays_for_type, Type}, _From, State) ->
+    {reply, get_primitive_arrays_for_type_impl(State, Type), State};
 handle_call({get_string, StringId}, _From, State) ->
     Return = case ets_get(State#state.ets_strings, StringId) of
         #hprof_record_string{data=V} -> V;
@@ -218,6 +226,21 @@ init_ets(State) ->
         ets_roots_vm_internal = ets:new(roots_vm_internal, [set, {keypos, 2}]),
         ets_roots_jni_monitor = ets:new(roots_jni_monitor, [set, {keypos, 2}])
     }.
+
+get_primitive_arrays_for_type_impl(State, Type) ->
+    % Convert the atom to a type ordinal
+    PrimOrdinal = hprof:primitive_ordinal(Type),
+    ets:foldl(
+        fun(Element=#hprof_primitive_array{element_type=EType}, Acc) ->
+            case PrimOrdinal =:= EType of
+                true ->
+                    [Element|Acc];
+                false -> Acc
+            end
+        end,
+        [],
+        State#state.ets_primitive_array
+    ).
 
 get_id_for_string(State, String) when is_binary(String) ->
     case ets:lookup(State#state.ets_strings_reverse, String) of
