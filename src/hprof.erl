@@ -2,8 +2,8 @@
 -include("include/records.hrl").
 
 -export([
-    await_instances/2,
-    await_instances_acc/3,
+    await/2,
+    await_acc/3,
     primitive_size/2,
     parse_primitive/2,
     primitive_name/1,
@@ -14,30 +14,30 @@
 % the streaming form of instance parsing.
 % As the records are received, they will be passed to Fun.
 % This method will not return until the parser is finished sending objects.
--spec await_instances(reference(), function()) -> ok | {error, any()}.
-await_instances(Ref, Fun) ->
+-spec await(reference(), function()) -> ok | {error, any()}.
+await(Ref, Fun) ->
     receive
         {hprof_parser, Ref, {error, Reason}} ->
             {error, Reason};
         {hprof_parser, Ref, ok} ->
             ok;
-        {hprof_parser, Ref, I=#hprof_heap_instance{}} ->
+        {hprof_parser, Ref, I} ->
             Fun(I),
-            await_instances(Ref, Fun)
+            await(Ref, Fun)
     end.
 
 % Like await_instances, but acts more like fold. An initial state can be passed,
 % and will be passed as argument one to the lambda. The result of the lambda will
 % then be the initial state for the next call, etc.
--spec await_instances_acc(reference(), any(), function()) -> {ok, any()} | {error, any()}.
-await_instances_acc(Ref, Initial, Fun) ->
+-spec await_acc(reference(), any(), function()) -> {ok, any()} | {error, any()}.
+await_acc(Ref, Initial, Fun) ->
     receive
         {hprof_parser, Ref, {error, Reason}} ->
             {error, Reason};
         {hprof_parser, Ref, ok} ->
             {ok, Initial};
-        {hprof_parser, Ref, I=#hprof_heap_instance{}} ->
-            await_instances_acc(Ref, Fun(Initial, I), Fun)
+        {hprof_parser, Ref, I} ->
+            await_acc(Ref, Fun(Initial, I), Fun)
     end.
 
 % Get the size in bytes of a primitive type.
