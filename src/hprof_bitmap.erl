@@ -37,16 +37,14 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
                     % If there are 2 BPP, then it could be either ARGB_4444 or
                     % RGB_565, but ARGB_4444 is supposedly deprecated so guess
                     % RGB_565.
-                    PixelCount = (
+                    BytesPerPixel = byte_size(Bytes) div (
                         Width#hprof_instance_field.value *
                         Height#hprof_instance_field.value
                     ),
-                    Argb8888Bytes = PixelCount * 4,
-                    Rgb565Bytes = PixelCount * 2,
-                    ImageMode = case byte_size(Bytes) of
-                        Argb8888Bytes ->
+                    ImageMode = case BytesPerPixel of
+                        4 ->
                             ?BITMAP_MODE_ARGB_8888;
-                        Rgb565Bytes ->
+                        2 ->
                             ?BITMAP_MODE_RGB_565
                     end,
                     make_png(
