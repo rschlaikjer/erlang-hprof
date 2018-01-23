@@ -47,14 +47,24 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
                         2 ->
                             ?BITMAP_MODE_RGB_565;
                         1 ->
-                            ?BITMAP_MODE_A_8
+                            ?BITMAP_MODE_A_8;
+                        _ ->
+                            {error, {unknown_bit_depth,
+                                     Width#hprof_instance_field.value,
+                                     Height#hprof_instance_field.value,
+                                     byte_size(Bytes)
+                            }}
                     end,
-                    make_png(
-                        ImageMode,
-                        Width#hprof_instance_field.value,
-                        Height#hprof_instance_field.value,
-                        Bytes
-                    )
+                    case ImageMode of
+                        {error, Reason} -> {error, Reason};
+                        _ ->
+                            make_png(
+                                ImageMode,
+                                Width#hprof_instance_field.value,
+                                Height#hprof_instance_field.value,
+                                Bytes
+                            )
+                    end
             end
     end.
 
