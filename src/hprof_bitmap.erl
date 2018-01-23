@@ -32,8 +32,25 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
             ) of
                 not_found -> {error, missing_primitive_array};
                 #hprof_primitive_array{elements=Bytes} ->
+                    % Make a best guess as to which colourspace this image is.
+                    % If there are 4 bytes per pixel, odds are it's ARGB_8888
+                    % If there are 2 BPP, then it could be either ARGB_4444 or
+                    % RGB_565, but ARGB_4444 is supposedly deprecated so guess
+                    % RGB_565.
+                    PixelCount = (
+                        Width#hprof_instance_field.value *
+                        Height#hprof_instance_field.value
+                    ),
+                    Argb8888Bytes = PixelCount * 4,
+                    Rgb565Bytes = PixelCount * 2,
+                    ImageMode = case byte_size(Bytes) of
+                        Argb8888Bytes ->
+                            ?BITMAP_MODE_ARGB_8888;
+                        Rgb565Bytes ->
+                            ?BITMAP_MODE_RGB_565
+                    end,
                     make_png(
-                        ?BITMAP_MODE_ARGB_8888,
+                        ImageMode,
                         Width#hprof_instance_field.value,
                         Height#hprof_instance_field.value,
                         Bytes
@@ -41,6 +58,26 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
             end
     end.
 
+make_png(?BITMAP_MODE_ARGB_4444, Width, Height, Data) ->
+    Rgb8888Data = <<
+        <<
+          ((A bsl 4) bor A):8,
+          ((R bsl 4) bor R):8,
+          ((G bsl 4) bor G):8,
+          ((B bsl 4) bor B):8
+        >> || <<A:4, R:4, G:4, B:4>> <= Data
+    >>,
+    make_png(?BITMAP_MODE_ARGB_8888, Width, Height, Rgb8888Data);
+make_png(?BITMAP_MODE_RGB_565, Width, Height, Data) ->
+    Rgb8888Data = <<
+        <<
+          (((R * 527) + 23) bsr 6):8,
+          (((G * 259) + 33) bsr 6):8,
+          (((B * 527) + 23) bsr 6):8,
+          255:8
+        >> || <<R:5, G:6, B:5>> <= Data
+    >>,
+    make_png(?BITMAP_MODE_ARGB_8888, Width, Height, Rgb8888Data);
 make_png(Mode, Width, Height, Data) ->
     Header = make_header(Mode, Width, Height),
     PixelData = encode_pixel_data(Mode, Width, Data),
@@ -65,12 +102,6 @@ encode_pixel_data(?BITMAP_MODE_ARGB_8888, Width, Data) ->
     << <<X/binary>> || X <- [
         crc_chunk(?PNG_DATA_SEGMENT, S) || S <- lists:flatten(Compressed)
     ]>>.
-
-rgb_565_to_888(<<R:5, G:6, B:5>>) ->
-    R1 = ((R * 527) + 23) bsr 6,
-    G1 = ((G * 259) + 33) bsr 6,
-    B1 = ((B * 527) + 23) bsr 6,
-    <<R1:8, G1:8, B1:8>>.
 
 make_header(Mode, Width, Height) ->
     ColorType = case has_alpha(Mode) of
