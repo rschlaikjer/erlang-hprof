@@ -45,7 +45,9 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
                         4 ->
                             ?BITMAP_MODE_ARGB_8888;
                         2 ->
-                            ?BITMAP_MODE_RGB_565
+                            ?BITMAP_MODE_RGB_565;
+                        1 ->
+                            ?BITMAP_MODE_A_8
                     end,
                     make_png(
                         ImageMode,
@@ -56,6 +58,12 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
             end
     end.
 
+make_png(?BITMAP_MODE_A_8, Width, Height, Data) ->
+    Rgb8888Data = <<
+        <<0:8, 0:8, 0:8, A:8
+        >> || <<A:8>> <= Data
+    >>,
+    make_png(?BITMAP_MODE_ARGB_8888, Width, Height, Rgb8888Data);
 make_png(?BITMAP_MODE_ARGB_4444, Width, Height, Data) ->
     Rgb8888Data = <<
         <<
