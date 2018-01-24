@@ -75,13 +75,15 @@ make_png(?BITMAP_MODE_A_8, Width, Height, Data) ->
     >>,
     make_png(?BITMAP_MODE_ARGB_8888, Width, Height, Rgb8888Data);
 make_png(?BITMAP_MODE_ARGB_4444, Width, Height, Data) ->
+    % Ordering of these fields is a bit weird lookin because
+    % of endianness differences
     Rgb8888Data = <<
         <<
-          ((A bsl 4) bor A):8,
           ((R bsl 4) bor R):8,
           ((G bsl 4) bor G):8,
-          ((B bsl 4) bor B):8
-        >> || <<A:4, R:4, G:4, B:4>> <= Data
+          ((B bsl 4) bor B):8,
+          ((A bsl 4) bor A):8
+        >> || <<B:4, A:4, R:4, G:4>> <= Data
     >>,
     make_png(?BITMAP_MODE_ARGB_8888, Width, Height, Rgb8888Data);
 make_png(?BITMAP_MODE_RGB_565, Width, Height, Data) ->
