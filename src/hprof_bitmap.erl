@@ -35,8 +35,7 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
                     % Make a best guess as to which colourspace this image is.
                     % If there are 4 bytes per pixel, odds are it's ARGB_8888
                     % If there are 2 BPP, then it could be either ARGB_4444 or
-                    % RGB_565, but ARGB_4444 is supposedly deprecated so guess
-                    % RGB_565.
+                    % RGB_565, so we need to make an educated guess
                     BytesPerPixel = byte_size(Bytes) div (
                         Width#hprof_instance_field.value *
                         Height#hprof_instance_field.value
@@ -45,7 +44,11 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
                         4 ->
                             ?BITMAP_MODE_ARGB_8888;
                         2 ->
-                            ?BITMAP_MODE_RGB_565;
+                            % Need a tie breaker
+                            case is_data_likely_argb4444(Bytes) of
+                                true -> ?BITMAP_MODE_ARGB_4444;
+                                false -> ?BITMAP_MODE_RGB_565
+                            end;
                         1 ->
                             ?BITMAP_MODE_A_8;
                         _ ->
@@ -66,6 +69,22 @@ make_png(Parser, #hprof_heap_instance{instance_values=V}) when is_pid(Parser) ->
                             )
                     end
             end
+    end.
+
+% Make a best-guess at whether this image is in ARGB_4444 form or RGB_565 form.
+% As a heuristic, check how many pixels would be fully transparent if the image
+% were to be alpha. If more than some percentage would be transparent, this
+% image probably is.
+is_data_likely_argb4444(<<Bin/binary>>) ->
+    is_data_likely_argb4444(Bin, 0, 0).
+is_data_likely_argb4444(<<>>, Transparent, NonTransparent) ->
+    % If more than one in ten pixels would be fully transparent, odds are good
+    % it's ARGB
+    Transparent >= (NonTransparent div 10);
+is_data_likely_argb4444(<<_B:4, A:4, _R:4, _G:4, Rest/binary>>, Transparent, NonTransparent) ->
+    case A of
+        0 -> is_data_likely_argb4444(Rest, Transparent + 1, NonTransparent);
+        _ -> is_data_likely_argb4444(Rest, Transparent, NonTransparent + 1)
     end.
 
 make_png(?BITMAP_MODE_A_8, Width, Height, Data) ->
