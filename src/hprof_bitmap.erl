@@ -107,18 +107,14 @@ make_png(?BITMAP_MODE_ARGB_4444, Width, Height, Data) ->
     make_png(?BITMAP_MODE_ARGB_8888, Width, Height, Rgb8888Data);
 make_png(?BITMAP_MODE_RGB_565, Width, Height, Data) ->
     % Since the data crosses byte boundaries, we need to shuffle
-    % it from one endianness to the other
-    EndianSwapped = <<
-        <<X:2/unsigned-integer-little-unit:8>>
-        || <<X:2/unsigned-integer-big-unit:8>> <= Data
-    >>,
+    % the green channel a bit to get it out correctly
     Rgb8888Data = <<
         <<
           (((R * 527) + 23) bsr 6):8,
-          (((G * 259) + 33) bsr 6):8,
+          (((((GHigh bsl 3) bor GLow) * 259) + 33) bsr 6):8,
           (((B * 527) + 23) bsr 6):8,
           255:8
-        >> || <<R:5, G:6, B:5>> <= EndianSwapped
+        >> || <<GLow:3, B:5, R:5, GHigh:3>> <= Data
     >>,
     make_png(?BITMAP_MODE_ARGB_8888, Width, Height, Rgb8888Data);
 make_png(Mode, Width, Height, Data) ->
