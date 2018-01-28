@@ -9,8 +9,12 @@
     parse_file/1,
     parse_binary/1,
     close/1,
+    % Get the reference size for the dump
+    reference_size/1,
     % Fetch a single string from the string table
     get_string/2,
+    % Get the name for a class by id
+    get_name_for_class_id/2,
     % Fetch all heap instances. Response is streamed.
     get_all_instances/1,
     % Fetch instances matching a specific class name. Streamed.
@@ -53,6 +57,7 @@
     ets_object_array :: reference(),
     ets_primitive_array :: reference(),
     ets_class_dump :: reference(),
+    ets_class_instance_parser :: reference(),
     ets_class_name_by_id :: reference(),
 
     % A map of all object IDs to their root type
@@ -88,6 +93,14 @@ parse_binary(Binary) when is_binary(Binary) ->
 close(Pid) when is_pid(Pid) ->
     call(Pid, close).
 
+-spec reference_size(pid()) -> 8 | 4.
+reference_size(Pid) when is_pid(Pid) ->
+    call(Pid, get_reference_size).
+
+-spec get_name_for_class_id(pid(), pos_integer()) -> binary() | not_found.
+get_name_for_class_id(Pid, ClassObjectId) when is_pid(Pid) ->
+    call(Pid, {get_name_for_class_id, ClassObjectId}).
+
 -spec get_primitive_array(pid(), pos_integer()) -> #hprof_primitive_array{} | not_found.
 get_primitive_array(Pid, ObjectId) when is_pid(Pid) ->
     call(Pid, {get_primitive_array, ObjectId}).
@@ -121,6 +134,10 @@ init([{binary, Binary}]) ->
 
 handle_call(close, _From, State) ->
     {stop, normal, ok, State};
+handle_call(get_reference_size, _From, State) ->
+    {reply, State#state.heap_ref_size, State};
+handle_call({get_name_for_class_id, ClassObjectId}, _From, State) ->
+    {reply, get_name_for_class_id_impl(State, ClassObjectId), State};
 handle_call({get_primitive_array, ObjectId}, _From, State) ->
     {reply, ets_get(State#state.ets_primitive_array, ObjectId), State};
 handle_call({get_primitive_arrays_for_type, Caller, Type}, _From, State) ->
@@ -184,7 +201,7 @@ stream_instances_filter(State, Caller, AcceptFun) when is_function(AcceptFun) ->
     % instance data
     spawn_link(hprof_instance_parser, parse_instances, [
         self(), Caller, Ref, AcceptFun,
-        State#state.hprof_data, State#state.ets_class_dump
+        State#state.hprof_data, State#state.ets_class_instance_parser
     ]),
 
     % Return the request ref
@@ -210,6 +227,7 @@ init_ets(State) ->
         ets_object_array = ets:new(object_array, [set, {keypos, 2}, compressed]),
         ets_primitive_array = ets:new(primitive_array, [set, {keypos, 2}, compressed]),
         ets_class_dump = ets:new(class_dump, [set, {keypos, 2}]),
+        ets_class_instance_parser = ets:new(class_instance_parser, [set]),
         ets_class_name_by_id = ets:new(class_dump, [set]),
         ets_roots = ets:new(roots, [set, {keypos, 2}]),
         ets_roots_unknown = ets:new(roots_unknown, [set, {keypos, 2}]),
@@ -226,6 +244,18 @@ init_ets(State) ->
         ets_roots_vm_internal = ets:new(roots_vm_internal, [set, {keypos, 2}]),
         ets_roots_jni_monitor = ets:new(roots_jni_monitor, [set, {keypos, 2}])
     }.
+
+get_name_for_class_id_impl(State=#state{}, ClassObjectId) ->
+    case ets:select(
+        State#state.ets_class_load,
+        ets:fun2ms(fun(F=#hprof_record_load_class{class_object_id=Cid}) when Cid =:= ClassObjectId -> F end)) of
+        [] -> not_found;
+        [#hprof_record_load_class{class_name_string_id=StringId}] ->
+            case ets_get(State#state.ets_strings, StringId) of
+                #hprof_record_string{data=V} -> V;
+                _ -> not_found
+            end
+    end.
 
 get_primitive_arrays_for_type_impl(State, Caller, Type) ->
     % Convert the atom to a type ordinal
@@ -267,6 +297,66 @@ get_class_obj_by_name_id(State, StringId) ->
             end
     end.
 
+create_parsers_for_instances(State) ->
+    ets:foldl(
+        fun(#hprof_class_dump{class_id=ClassId}, _) ->
+            ets:insert(
+                State#state.ets_class_instance_parser,
+                {ClassId, create_parser_for_class(State, ClassId)}
+            )
+        end,
+        ok,
+        State#state.ets_class_dump
+    ).
+
+create_parser_for_class(State, ClassId) ->
+    create_parser_for_class(State, ClassId, []).
+
+create_parser_for_class(_State, 0, FunAcc) ->
+    ParserFun = lists:foldl(
+        fun (Function, Accumulator) -> Function(Accumulator) end,
+        fun (<<>>, Acc) -> Acc end,
+        FunAcc
+    ),
+    fun(Data) -> ParserFun(Data, #{}) end;
+create_parser_for_class(State, ClassId, FunAcc) ->
+    ClassObj = hd(ets:lookup(State#state.ets_class_dump, ClassId)),
+    ClassInstanceFields = ClassObj#hprof_class_dump.instance_fields,
+    FieldParsers = create_parser_for_fields(State, ClassInstanceFields, FunAcc),
+    SuperClassId = ClassObj#hprof_class_dump.superclass_object,
+    create_parser_for_class(State, SuperClassId, FieldParsers).
+
+create_parser_for_fields(_State, [], FunAcc) ->
+    FunAcc;
+create_parser_for_fields(State, [Field|Fields], FunAcc) ->
+    create_parser_for_fields(
+        State,
+        Fields,
+        [create_parser_for_field(
+            State,
+            Field#hprof_instance_field.type,
+            Field#hprof_instance_field.name_string_id
+        )|FunAcc]
+    ).
+
+create_parser_for_field(State, Type, NameId) ->
+    NameString= case ets_get(State#state.ets_strings, NameId) of
+        #hprof_record_string{data=V} -> V;
+        _ -> not_found
+    end,
+    DataSize = hprof:primitive_size(State#state.heap_ref_size, Type),
+    fun (Cont) ->
+        fun(<<PrimitiveBin:DataSize/binary, Rest/binary>>, Acc) ->
+            Field = #hprof_instance_field{
+                name_string_id=NameId,
+                name=NameString,
+                type=Type,
+                value=hprof:parse_primitive(PrimitiveBin, Type)
+            },
+            Cont(Rest, maps:put(NameString, Field, Acc))
+        end
+    end.
+
 
 parse_binary(State, Bin) ->
     parse_header(State#state{hprof_data=Bin}, Bin).
@@ -287,6 +377,7 @@ parse_header(State, Bindata) ->
     parse_records_optimized(State1, Rest).
 
 parse_records_optimized(State, <<>>) ->
+    create_parsers_for_instances(State),
     State;
 parse_records_optimized(State, <<Binary/binary>>) ->
     <<RecordType:?UINT8,

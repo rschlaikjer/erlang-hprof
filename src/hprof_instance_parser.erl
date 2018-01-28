@@ -13,18 +13,18 @@
     ref :: reference(),
     accept_fun :: function(),
     ref_size :: 4 | 8,
-    ets_class_dump :: reference()
+    ets_class_instance_parser :: reference()
 }).
 
 %% Public
 
-parse_instances(Parser, Recipient, Ref, AcceptFun, Binary, ClassEts) ->
+parse_instances(Parser, Recipient, Ref, AcceptFun, Binary, ParserEts) ->
     State = #state{
         parser = Parser,
         recipient = Recipient,
         ref = Ref,
         accept_fun = AcceptFun,
-        ets_class_dump = ClassEts
+        ets_class_instance_parser = ParserEts
     },
     parse_instances_header(State, Binary).
 
@@ -40,55 +40,24 @@ parse_instance_record(State, R=#hprof_heap_instance_raw{}) ->
     } = R,
 
     % Parse the class data
-    Values = parse_instance_record_for_class(
-        State, Data, ClassObjectId, #{}
+    {ClassObjectId, Parser} = hd(ets:lookup(
+        State#state.ets_class_instance_parser, ClassObjectId
+    )),
+    Values = Parser(Data),
+
+    % Get the class name
+    ClassName = hprof_parser:get_name_for_class_id(
+        State#state.parser, ClassObjectId
     ),
 
+    % Bundle the data back up
     #hprof_heap_instance{
         object_id=ObjectId,
+        class_name=ClassName,
         stack_trace_serial=StackTraceSerial,
         class_object_id=ClassObjectId,
         instance_values=Values
     }.
-
-% Class ID of 0 is 'Object'
-parse_instance_record_for_class(_State, <<_Binary/binary>>, 0, Acc) ->
-    Acc;
-parse_instance_record_for_class(State, <<Binary/binary>>, ClassId, Acc) ->
-    % Get the class instance for this object
-    ClassObj = hd(ets:lookup(State#state.ets_class_dump, ClassId)),
-
-    % Get the list of instance fields to read data for, and extract them
-    ClassInstanceFields = ClassObj#hprof_class_dump.instance_fields,
-    SuperClassId = ClassObj#hprof_class_dump.superclass_object,
-    extract_instance_id_fields(
-        State, Binary, SuperClassId, ClassInstanceFields, Acc
-    ).
-
-extract_instance_id_fields(State, <<Binary/binary>>, SuperClassId, [], Acc) ->
-    parse_instance_record_for_class(
-        State, Binary, SuperClassId, Acc
-    );
-extract_instance_id_fields(State, <<Binary/binary>>, SuperClassId, [Field|Fields], Acc) ->
-    #hprof_instance_field{name_string_id=Name, type=Type} = Field,
-    RefSize = State#state.ref_size,
-    DataSize = hprof:primitive_size(RefSize, Type),
-    extract_instance_id_field(
-        State, Binary, SuperClassId, Fields, Acc, Name, Type, DataSize
-    ).
-
-extract_instance_id_field(State, <<Binary/binary>>, SuperClassId, Fields, Acc, Name, Type, DataSize) ->
-    <<PrimitiveBin:DataSize/binary, Rest/binary>> = Binary,
-    NameString = hprof_parser:get_string(State#state.parser, Name),
-    Value = #hprof_instance_field{
-        name_string_id=Name,
-        name=NameString,
-        type=Type,
-        value=hprof:parse_primitive(PrimitiveBin, Type)
-    },
-    extract_instance_id_fields(
-        State, Rest, SuperClassId, Fields, maps:put(NameString, Value, Acc)
-    ).
 
 parse_instances_header(State, Binary) ->
     % Peel off and ignore the header, with the exception of the heap ref size
