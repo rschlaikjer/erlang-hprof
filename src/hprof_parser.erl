@@ -295,7 +295,7 @@ initialize_class_name_by_id(State=#state{}) ->
     ets:foldl(
         fun(#hprof_record_load_class{class_object_id=Cid, class_name_string_id=StringId}, _) ->
             StringVal = case ets:lookup(State#state.ets_strings, StringId) of
-                #hprof_record_string{data=V} -> V;
+                [#hprof_record_string{data=V}] -> V;
                 _ -> not_found
             end,
             ets:insert(State#state.ets_class_name_by_id, {Cid, StringVal})
