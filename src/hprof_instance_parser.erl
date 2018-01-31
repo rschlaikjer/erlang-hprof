@@ -8,23 +8,23 @@
 ]).
 
 -record(state, {
-    parser :: pid(),
     recipient :: pid(),
     ref :: reference(),
     accept_fun :: function(),
     ref_size :: 4 | 8,
-    ets_class_instance_parser :: reference()
+    ets_class_instance_parser :: reference(),
+    ets_class_name_by_id :: reference()
 }).
 
 %% Public
 
-parse_instances(Parser, Recipient, Ref, AcceptFun, Binary, ParserEts) ->
+parse_instances(Recipient, Ref, AcceptFun, Binary, ParserEts, ClassNameEts) ->
     State = #state{
-        parser = Parser,
         recipient = Recipient,
         ref = Ref,
         accept_fun = AcceptFun,
-        ets_class_instance_parser = ParserEts
+        ets_class_instance_parser = ParserEts,
+        ets_class_name_by_id = ClassNameEts
     },
     parse_instances_header(State, Binary).
 
@@ -46,9 +46,10 @@ parse_instance_record(State, R=#hprof_heap_instance_raw{}) ->
     Values = Parser(Data),
 
     % Get the class name
-    ClassName = hprof_parser:get_name_for_class_id(
-        State#state.parser, ClassObjectId
-    ),
+    ClassName = case ets:lookup(State#state.ets_class_name_by_id, ClassObjectId) of
+        [{_, Name}] -> Name;
+        _ -> not_found
+    end,
 
     % Bundle the data back up
     #hprof_heap_instance{

@@ -137,7 +137,11 @@ handle_call(close, _From, State) ->
 handle_call(get_reference_size, _From, State) ->
     {reply, State#state.heap_ref_size, State};
 handle_call({get_name_for_class_id, ClassObjectId}, _From, State) ->
-    {reply, get_name_for_class_id_impl(State, ClassObjectId), State};
+    Resp = case ets_get(State#state.ets_class_name_by_id, ClassObjectId) of
+        {_, V} -> V;
+        Other -> Other
+    end,
+    {reply, Resp, State};
 handle_call({get_primitive_array, ObjectId}, _From, State) ->
     {reply, ets_get(State#state.ets_primitive_array, ObjectId), State};
 handle_call({get_primitive_arrays_for_type, Caller, Type}, _From, State) ->
@@ -200,8 +204,10 @@ stream_instances_filter(State, Caller, AcceptFun) when is_function(AcceptFun) ->
     % Spawn a worker to iterate over the hprof data and pull out the relevant
     % instance data
     spawn_link(hprof_instance_parser, parse_instances, [
-        self(), Caller, Ref, AcceptFun,
-        State#state.hprof_data, State#state.ets_class_instance_parser
+        Caller, Ref, AcceptFun,
+        State#state.hprof_data,
+        State#state.ets_class_instance_parser,
+        State#state.ets_class_name_by_id
     ]),
 
     % Return the request ref
@@ -245,18 +251,6 @@ init_ets(State) ->
         ets_roots_jni_monitor = ets:new(roots_jni_monitor, [set, {keypos, 2}])
     }.
 
-get_name_for_class_id_impl(State=#state{}, ClassObjectId) ->
-    case ets:select(
-        State#state.ets_class_load,
-        ets:fun2ms(fun(F=#hprof_record_load_class{class_object_id=Cid}) when Cid =:= ClassObjectId -> F end)) of
-        [] -> not_found;
-        [#hprof_record_load_class{class_name_string_id=StringId}] ->
-            case ets_get(State#state.ets_strings, StringId) of
-                #hprof_record_string{data=V} -> V;
-                _ -> not_found
-            end
-    end.
-
 get_primitive_arrays_for_type_impl(State, Caller, Type) ->
     % Convert the atom to a type ordinal
     Ref = make_ref(),
@@ -296,6 +290,19 @@ get_class_obj_by_name_id(State, StringId) ->
                 [ClassDump] -> ClassDump
             end
     end.
+
+initialize_class_name_by_id(State=#state{}) ->
+    ets:foldl(
+        fun(#hprof_record_load_class{class_object_id=Cid, class_name_string_id=StringId}, _) ->
+            StringVal = case ets:lookup(State#state.ets_strings, StringId) of
+                #hprof_record_string{data=V} -> V;
+                _ -> not_found
+            end,
+            ets:insert(State#state.ets_class_name_by_id, {Cid, StringVal})
+        end,
+        ok,
+        State#state.ets_class_load
+    ).
 
 create_parsers_for_instances(State) ->
     ets:foldl(
@@ -345,13 +352,14 @@ create_parser_for_field(State, Type, NameId) ->
         _ -> not_found
     end,
     DataSize = hprof:primitive_size(State#state.heap_ref_size, Type),
+    OrdType = hprof:primitive_ordinal(Type),
     fun (Cont) ->
         fun(<<PrimitiveBin:DataSize/binary, Rest/binary>>, Acc) ->
             Field = #hprof_instance_field{
                 name_string_id=NameId,
                 name=NameString,
                 type=Type,
-                value=hprof:parse_primitive(PrimitiveBin, Type)
+                value=hprof:parse_primitive(PrimitiveBin, OrdType)
             },
             Cont(Rest, maps:put(NameString, Field, Acc))
         end
@@ -378,6 +386,7 @@ parse_header(State, Bindata) ->
 
 parse_records_optimized(State, <<>>) ->
     create_parsers_for_instances(State),
+    initialize_class_name_by_id(State),
     State;
 parse_records_optimized(State, <<Binary/binary>>) ->
     <<RecordType:?UINT8,
