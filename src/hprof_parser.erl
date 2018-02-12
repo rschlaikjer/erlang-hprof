@@ -21,6 +21,8 @@
     get_instances_for_class/2,
     % Fetch all primitive arrays of a given type
     get_primitive_arrays_of_type/2,
+    % Getch all object arrays
+    get_object_arrays/1,
     % Fetch a primitive array, by ID
     get_primitive_array/2
 ]).
@@ -121,6 +123,10 @@ get_all_instances(Pid) when is_pid(Pid) ->
 get_instances_for_class(Pid, ClassName) when is_pid(Pid) and is_binary(ClassName) ->
     call(Pid, {get_instances_for_class, ClassName, self()}).
 
+-spec get_object_arrays(pid()) -> {ok, reference()}.
+get_object_arrays(Pid) when is_pid(Pid) ->
+    call(Pid, {get_object_arrays, self()}).
+
 call(Pid, Data) -> gen_server:call(Pid, Data, infinity).
 
 %% Callbacks
@@ -156,6 +162,8 @@ handle_call({get_all_instances, Caller}, _From, State) ->
     {reply, stream_instances(State, Caller), State};
 handle_call({get_instances_for_class, ClassName, Caller}, _From, State) ->
     {reply, stream_instances(State, Caller, ClassName), State};
+handle_call({get_object_arrays, Caller}, _From, State) ->
+    {reply, get_object_arrays_impl(State, Caller), State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
@@ -267,6 +275,20 @@ get_primitive_arrays_for_type_impl(State, Caller, Type) ->
             end,
             ok,
             State#state.ets_primitive_array
+        ),
+        Caller ! {hprof_parser, Ref, ok}
+    end),
+    {ok, Ref}.
+
+get_object_arrays_impl(State, Caller) ->
+    Ref = make_ref(),
+    spawn(fun() ->
+        ets:foldl(
+            fun(Element, _Acc) ->
+                Caller ! {hprof_parser, Ref, Element}
+            end,
+            ok,
+            State#state.ets_object_array
         ),
         Caller ! {hprof_parser, Ref, ok}
     end),
