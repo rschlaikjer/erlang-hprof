@@ -59,12 +59,45 @@ resolve_ids(Parser, Ids, EmittedIds, Chunks, Iters) ->
             update_with_id(Ids, {I, E, C}, Inst)
         end
     ),
-    case sets:size(Ids1) of
+
+    % In addition to other instances, pointers may be contained in object
+    % arrays. Stream these too and check if any contain a reference to
+    % anything in our ID set.
+    {ok, ObjectArrayRef} = hprof_parser:get_object_arrays(Parser),
+    {ok, {Ids2, Emitted2, Chunks2}} = hprof:await_acc(
+        ObjectArrayRef,
+        {Ids1, Emitted1, Chunks1},
+        fun({I, E, C}, Arr=#hprof_object_array{}) ->
+            update_with_id(Ids, {I, E, C}, Arr)
+        end
+    ),
+
+    case sets:size(Ids2) of
         0 -> Chunks1;
         _ ->
-            resolve_ids(Parser, Ids1, Emitted1, Chunks1, Iters - 1)
+            resolve_ids(Parser, Ids2, Emitted2, Chunks2, Iters - 1)
     end.
 
+update_with_id(TargetIds, {I, E, C}, Arr=#hprof_object_array{object_id=ArrId, elements=Elements}) ->
+    case sets:is_element(ArrId, E) of
+        true -> {I, E, C};  % Array been seen before
+        false ->
+            % For each of the target IDs, if this array points to it, emit
+            % a mapping.
+            Changed = update_chunks_with_object_array(ArrId, TargetIds, C, Elements),
+            case Changed =:= C of
+                true -> {I, E, C}; % No change
+                false ->
+                    % Emit a descriptor chunk for this array
+                    ArrAttrs = create_chunk_for_object_array(Arr),
+
+                    % Add the ID of this instance to the search set for next
+                    % generation and the emitted set
+                    {sets:add_element(ArrId, I),
+                     sets:add_element(ArrId, E),
+                     [ArrAttrs|Changed]}
+            end
+    end;
 update_with_id(TargetIds, {I, E, C}, Inst=#hprof_heap_instance{object_id=Oid, instance_values=Vals}) ->
     case sets:is_element(Oid, E) of
         true -> {I, E, C};  % This instance is already worked into the graph
@@ -98,6 +131,12 @@ create_chunk_for_instance(Inst) ->
     ObjId = <<"obj_", ObjIdBin/binary>>,
     <<ObjId/binary, " [label=\"", ObectName/binary,"\"];\n">>.
 
+create_chunk_for_object_array(Arr) ->
+    ArrIdBin = integer_to_binary(Arr#hprof_object_array.object_id),
+    ArrName = <<"Object array ", ArrIdBin/binary>>,
+    ObjId = <<"obj_", ArrIdBin/binary>>,
+    <<ObjId/binary, " [label=\"", ArrName/binary,"\"];\n">>.
+
 update_chunks_with_instance_fields(Oid, TargetIds, Chunks, Vals) ->
     % For each instance field of an instance, check if it points to an object
     % and if that object is one of the target objects.
@@ -120,6 +159,24 @@ update_chunks_with_instance_fields(Oid, TargetIds, Chunks, Vals) ->
         end,
         Chunks,
         Vals
+    ).
+
+update_chunks_with_object_array(ArrId, TargetIds, C, Elements) ->
+    % For each element in the object array, check if it's a target and if so
+    % add a new mapping to the chunk accumulator
+    lists:foldl(
+        fun(ElementId, Acc) ->
+            case sets:is_element(ElementId, TargetIds) of
+                false -> Acc; %  Not an object of interest
+                true ->
+                    ReferentId = <<"obj_", (integer_to_binary(ElementId))/binary>>,
+                    Ref = <<"obj_", (integer_to_binary(ArrId))/binary, " -> ", ReferentId/binary,
+                            ";\n">>,
+                    [Ref|Acc]
+            end
+        end,
+        C,
+        Elements
     ).
 
 % For a list of object arrays, accumulate chunks for those arrays both
