@@ -3,6 +3,7 @@
 -include("include/records.hrl").
 
 -export([
+    reference_graph_for_instance/3,
     reference_graph_for_array/3
 ]).
 
@@ -32,6 +33,29 @@ reference_graph_for_array(Parser, TargetId, MaxDepth) ->
             % accumulator
             lists:reverse([<<"}">>|Chunks2])
     end.
+
+reference_graph_for_instance(Parser, TargetId, MaxDepth) ->
+    % Create a terminal chunk for this instance ID
+    TargetIdBin = integer_to_binary(TargetId),
+    TargetName = <<"Target Instance (", TargetIdBin/binary, ")">>,
+    TargetId = <<"obj_", TargetIdBin/binary>>,
+    TargetDescriptor = <<TargetId/binary, " [label=\"", TargetName/binary, "\"];\n">>,
+    Chunks1 = [TargetDescriptor|[<<"digraph heap {\n">>]],
+
+    % The only ID we start off trying to resolve is that of the instance
+    IdsToResolve = sets:from_list([TargetId]),
+
+    % Repeatedly resolve instances that refer to the IDs we care about,
+    % until we reach the max depth
+    Chunks2 = resolve_ids(
+        Parser,
+        IdsToResolve, IdsToResolve,
+        Chunks1, MaxDepth
+    ),
+
+    % Append the closing bracket for the digraph and reverse the
+    % accumulator
+    lists:reverse([<<"}">>|Chunks2]).
 
 resolve_ids(_Parser, _Ids, _EmittedIds, Chunks, 0) ->
     % Max depth has been reached.
