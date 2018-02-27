@@ -38,8 +38,8 @@ reference_graph_for_instance(Parser, TargetId, MaxDepth) ->
     % Create a terminal chunk for this instance ID
     TargetIdBin = integer_to_binary(TargetId),
     TargetName = <<"Target Instance (", TargetIdBin/binary, ")">>,
-    TargetId = <<"obj_", TargetIdBin/binary>>,
-    TargetDescriptor = <<TargetId/binary, " [label=\"", TargetName/binary, "\"];\n">>,
+    TargetObjId = <<"obj_", TargetIdBin/binary>>,
+    TargetDescriptor = <<TargetObjId/binary, " [label=\"", TargetName/binary, "\"];\n">>,
     Chunks1 = [TargetDescriptor|[<<"digraph heap {\n">>]],
 
     % The only ID we start off trying to resolve is that of the instance
