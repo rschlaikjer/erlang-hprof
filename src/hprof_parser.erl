@@ -24,7 +24,9 @@
     % Getch all object arrays
     get_object_arrays/1,
     % Fetch a primitive array, by ID
-    get_primitive_array/2
+    get_primitive_array/2,
+    % Get the reference root for an object
+    get_object_root/2
 ]).
 
 % gen_server
@@ -127,6 +129,10 @@ get_instances_for_class(Pid, ClassName) when is_pid(Pid) and is_binary(ClassName
 get_object_arrays(Pid) when is_pid(Pid) ->
     call(Pid, {get_object_arrays, self()}).
 
+-spec get_object_root(pid(), pos_integer()) -> {ok, atom()}.
+get_object_root(Pid, ObjectId) when is_pid(Pid) ->
+    call(Pid, {get_object_root, ObjectId}).
+
 call(Pid, Data) -> gen_server:call(Pid, Data, infinity).
 
 %% Callbacks
@@ -164,6 +170,12 @@ handle_call({get_instances_for_class, ClassName, Caller}, _From, State) ->
     {reply, stream_instances(State, Caller, ClassName), State};
 handle_call({get_object_arrays, Caller}, _From, State) ->
     {reply, get_object_arrays_impl(State, Caller), State};
+handle_call({get_object_root, ObjId}, _From, State) ->
+    Ret = case ets_get(State#state.ets_roots, ObjId) of
+        #hprof_root{root_type=Type} -> Type;
+        _ -> not_found
+    end,
+    {reply, Ret, State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
