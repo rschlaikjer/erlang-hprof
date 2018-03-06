@@ -26,7 +26,9 @@
     % Fetch a primitive array, by ID
     get_primitive_array/2,
     % Get the reference root for an object
-    get_object_root/2
+    get_object_root/2,
+    % Get all dumped class info
+    get_class_dumps/1
 ]).
 
 % gen_server
@@ -133,6 +135,10 @@ get_object_arrays(Pid) when is_pid(Pid) ->
 get_object_root(Pid, ObjectId) when is_pid(Pid) ->
     call(Pid, {get_object_root, ObjectId}).
 
+-spec get_class_dumps(pid()) -> {ok, reference()}.
+get_class_dumps(Pid) when is_pid(Pid) ->
+    call(Pid, {get_class_dumps, self()}).
+
 call(Pid, Data) -> gen_server:call(Pid, Data, infinity).
 
 %% Callbacks
@@ -170,6 +176,8 @@ handle_call({get_instances_for_class, ClassName, Caller}, _From, State) ->
     {reply, stream_instances(State, Caller, ClassName), State};
 handle_call({get_object_arrays, Caller}, _From, State) ->
     {reply, get_object_arrays_impl(State, Caller), State};
+handle_call({get_class_dumps, Caller}, _From, State) ->
+    {reply, get_class_dumps_impl(State, Caller), State};
 handle_call({get_object_root, ObjId}, _From, State) ->
     Ret = case ets_get(State#state.ets_roots, ObjId) of
         #hprof_root{root_type=Type} -> Type;
@@ -287,6 +295,20 @@ get_primitive_arrays_for_type_impl(State, Caller, Type) ->
             end,
             ok,
             State#state.ets_primitive_array
+        ),
+        Caller ! {hprof_parser, Ref, ok}
+    end),
+    {ok, Ref}.
+
+get_class_dumps_impl(State, Caller) ->
+    Ref = make_ref(),
+    spawn(fun() ->
+        ets:foldl(
+            fun(Element, _Acc) ->
+                Caller ! {hprof_parser, Ref, Element}
+            end,
+            ok,
+            State#state.ets_class_dump
         ),
         Caller ! {hprof_parser, Ref, ok}
     end),
