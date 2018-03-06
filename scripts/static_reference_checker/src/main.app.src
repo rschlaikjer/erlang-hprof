@@ -1,0 +1,7 @@
+{application, main, [
+    {description, "Static reference chain checker"},
+    {vsn, "1"},
+    {registered, []},
+    {applications, [kernel, stdlib, sasl, hprof]},
+    {env, []}
+]}.
