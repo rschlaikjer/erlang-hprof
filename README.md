@@ -3,6 +3,9 @@
 Based off the hprof dumping implementation for ART, visible
 [here](https://android.googlesource.com/platform/art/+/oreo-release/runtime/hprof/hprof.cc)
 
+Under the [scripts](scripts/) folder is a collection of tools that are useful but
+too special-case to be part of the library itself.
+
 ## Usage
 
 Create a parser context for either a file or loaded binary
