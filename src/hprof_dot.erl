@@ -1,6 +1,6 @@
 -module(hprof_dot).
 
--include("include/records.hrl").
+-include_lib("hprof/include/records.hrl").
 
 -export([
     reference_graph_for_instance/3,

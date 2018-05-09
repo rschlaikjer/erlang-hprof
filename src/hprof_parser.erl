@@ -2,7 +2,7 @@
 -behavior(gen_server).
 
 -include_lib("stdlib/include/ms_transform.hrl").
--include("include/records.hrl").
+-include_lib("hprof/include/records.hrl").
 
 % Public API
 -export([

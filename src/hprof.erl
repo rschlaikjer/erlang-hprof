@@ -1,5 +1,5 @@
 -module(hprof).
--include("include/records.hrl").
+-include_lib("hprof/include/records.hrl").
 
 -export([
     await/2,

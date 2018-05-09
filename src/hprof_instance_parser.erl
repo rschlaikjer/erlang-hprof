@@ -1,6 +1,6 @@
 -module(hprof_instance_parser).
 
--include("include/records.hrl").
+-include_lib("hprof/include/records.hrl").
 
 % Public API
 -export([
