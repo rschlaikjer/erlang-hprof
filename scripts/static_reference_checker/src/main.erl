@@ -3,7 +3,7 @@
 
 -include_lib("hprof/include/records.hrl").
 
-main([DumpFile, TargetInstanceId]) ->
+main([DumpFile|TargetInstanceIds]) ->
     io:format("Loading heap dump file ~s~n", [DumpFile]),
     {ok, Parser} = hprof_parser:parse_file(DumpFile),
 
@@ -12,13 +12,18 @@ main([DumpFile, TargetInstanceId]) ->
 
     % Spawn a process to start searching the heap graph
     Self = self(),
-    spawn_link(fun() ->
-        find_reference_chains(
-            Self, ObjectReferenceMap, StaticObjectMap,
-            list_to_integer(TargetInstanceId),
-            sets:new()
-        )
-    end),
+    lists:foreach(
+        fun(TargetInstanceId) ->
+            spawn_link(fun() ->
+                find_reference_chains(
+                    Self, ObjectReferenceMap, StaticObjectMap,
+                    list_to_integer(TargetInstanceId),
+                    sets:new()
+                )
+             end)
+        end,
+        TargetInstanceIds
+    ),
 
     % Enter the receive + print loop
     io:format("Waiting for reference chains...~n"),
