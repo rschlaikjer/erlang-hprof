@@ -27,16 +27,18 @@ main([DumpFile|TargetInstanceIds]) ->
 
     % Enter the receive + print loop
     io:format("Waiting for reference chains...~n"),
-    recv_print_loop(Parser).
+    recv_print_loop(Parser, [list_to_integer(T) || T <- TargetInstanceIds]).
 
-recv_print_loop(Parser) ->
+recv_print_loop(Parser, []) ->
+    hprof_parser:close(Parser),
+    ok;
+recv_print_loop(Parser, Targets) ->
     receive
         {chain, _From, RefChain} ->
             print_ref_chain(Parser, RefChain),
-            recv_print_loop(Parser);
-        done ->
-            hprof_parser:close(Parser),
-            ok
+            recv_print_loop(Parser, Targets);
+        {done, Target} ->
+            recv_print_loop(Parser, [T || T <- Targets, T =/= Target])
     end.
 
 % In order to reduce the search space and cut down on false positives, ignore
@@ -269,7 +271,7 @@ next_for_instance(_Parser, InstanceIdSet, #hprof_object_array{elements=Elements}
 
 find_reference_chains(Caller, ReferrersByReferent, StaticObjects, TargetId, PreviousRoots) ->
     find_reference_chains(Caller, ReferrersByReferent, StaticObjects, TargetId, PreviousRoots, []),
-    Caller ! done.
+    Caller ! {done, TargetId}.
 
 find_reference_chains(Caller, ReferrersByReferent, StaticObjects, TargetId, PreviousRoots, RefChain) ->
     % Get all objects that refer to our target
