@@ -205,7 +205,7 @@ print_ref_chain(Parser, RefChain) ->
     io:format(" ~s -static ~s-> ~p~n", [RootClassName, StaticVarName, StaticRootVar#hprof_static_field.data]),
     lists:foreach(
         fun(Id) ->
-            Instance = maps:get(Id, InstancesMap1),
+            Instance = maps:get(Id, InstancesMap1, not_found),
             case Instance of
                 #hprof_heap_instance{class_name=Name} ->
                     case next_for_instance(Parser, InstanceIdSet, Instance) of
@@ -220,7 +220,9 @@ print_ref_chain(Parser, RefChain) ->
                 #hprof_object_array{object_id=ArrId, element_class_object_id=ElementClassId} ->
                     NextInstanceId = next_for_instance(Parser, InstanceIdSet, Instance),
                     ArrayClassName = hprof_parser:get_name_for_class_id(Parser, ElementClassId),
-                    io:format(" ~s array (~p) -> ~p~n", [ArrayClassName, ArrId, NextInstanceId])
+                    io:format(" ~s array (~p) -> ~p~n", [ArrayClassName, ArrId, NextInstanceId]);
+                not_found ->
+                    io:format(" ??? Unknown object (~p)~n", [Id])
             end
         end,
         RefChain
