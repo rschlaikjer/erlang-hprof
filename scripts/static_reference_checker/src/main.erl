@@ -46,6 +46,7 @@ recv_print_loop(Parser) ->
 should_skip_instance(#hprof_heap_instance{class_name = <<"java.lang.ref.FinalizerReference">>}) -> true;
 should_skip_instance(#hprof_heap_instance{class_name = <<"java.lang.ref.WeakReference">>}) -> true;
 should_skip_instance(#hprof_heap_instance{class_name = <<"java.util.WeakHashMap$Entry">>}) -> true;
+should_skip_instance(#hprof_heap_instance{class_name = <<"sun.misc.Cleaner">>}) -> true;
 should_skip_instance(_) -> false.
 
 % Utility method for checking if a field references a nonnull object
